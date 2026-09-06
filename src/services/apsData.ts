@@ -1,49 +1,53 @@
-import type { APSHub, APSProject, APSItem } from '../types/aps';
+import type { APSHub, APSProject, APSItem, APSVersion } from '../types/aps';
 
-const BACKEND_BASE = '/api/data';
-
-async function fetchJson(url: string, token: string) {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-  };
-
-  const res = await fetch(url, { headers });
-
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    const message = errorData.error || errorData.details || res.statusText;
-    throw new Error(`API Error (${res.status}): ${typeof message === 'object' ? JSON.stringify(message) : message}`);
+export function toUrlSafeBase64(stringToEncode: string): string {
+  if (typeof window !== 'undefined' && window.Autodesk?.Viewing?.toUrlSafeBase64) {
+    return window.Autodesk.Viewing.toUrlSafeBase64(stringToEncode);
   }
-
-  return res.json();
+  return btoa(stringToEncode).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-export async function fetchLiveHubs(token: string): Promise<APSHub[]> {
-  return await fetchJson(`${BACKEND_BASE}/hubs`, token);
+async function getJSON<T>(url: string): Promise<T> {
+  const resp = await fetch(url, {
+    credentials: 'include',
+  });
+  if (!resp.ok) {
+    const errorText = await resp.text().catch(() => '');
+    throw new Error(`Request to ${url} failed (${resp.status}): ${errorText || resp.statusText}`);
+  }
+  return resp.json();
 }
 
-export async function fetchLiveProjects(hubId: string, token: string): Promise<APSProject[]> {
-  return await fetchJson(`${BACKEND_BASE}/hubs/${hubId}/projects`, token);
+export async function fetchLiveHubs(): Promise<APSHub[]> {
+  return await getJSON<APSHub[]>('/api/hubs');
 }
 
-export async function fetchLiveTopFolders(
+export async function fetchLiveProjects(hubId: string): Promise<APSProject[]> {
+  return await getJSON<APSProject[]>(`/api/hubs/${encodeURIComponent(hubId)}/projects`);
+}
+
+export async function fetchLiveContents(
   hubId: string,
   projectId: string,
-  token: string
+  folderId?: string | null
 ): Promise<APSItem[]> {
-  return await fetchJson(
-    `${BACKEND_BASE}/hubs/${hubId}/projects/${projectId}/topFolders`,
-    token
+  const query = folderId ? `?folder_id=${encodeURIComponent(folderId)}` : '';
+  const items = await getJSON<APSItem[]>(
+    `/api/hubs/${encodeURIComponent(hubId)}/projects/${encodeURIComponent(projectId)}/contents${query}`
+  );
+  return items;
+}
+
+export async function fetchLiveItemVersions(
+  hubId: string,
+  projectId: string,
+  itemId: string
+): Promise<APSVersion[]> {
+  return await getJSON<APSVersion[]>(
+    `/api/hubs/${encodeURIComponent(hubId)}/projects/${encodeURIComponent(projectId)}/contents/${encodeURIComponent(itemId)}/versions`
   );
 }
 
-export async function fetchLiveFolderContents(
-  projectId: string,
-  folderId: string,
-  token: string
-): Promise<APSItem[]> {
-  return await fetchJson(
-    `${BACKEND_BASE}/projects/${projectId}/folders/${folderId}/contents`,
-    token
-  );
+export async function getPublicToken(): Promise<{ access_token: string; expires_in: number }> {
+  return await getJSON<{ access_token: string; expires_in: number }>('/api/auth/token');
 }

@@ -11,6 +11,7 @@ import {
   Loader2
 } from 'lucide-react';
 import type { APSItem } from '../types/aps';
+import { getPublicToken } from '../services/apsData';
 
 declare global {
   interface Window {
@@ -20,13 +21,13 @@ declare global {
 
 interface AutodeskViewerProps {
   selectedItem: APSItem | null;
-  accessToken: string | null;
+  isAuthenticated: boolean;
   onLoginRequest?: () => void;
 }
 
 export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
   selectedItem,
-  accessToken,
+  isAuthenticated,
   onLoginRequest,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,26 +52,24 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
     setIsLoadingViewer(true);
     setViewerError(null);
 
-    // Token provider function: passes active 3-legged ACC OAuth token
-    const getAccessToken = (callback: (token: string, expires: number) => void) => {
-      if (accessToken) {
-        callback(accessToken, 3600);
-      } else {
-        fetch('/api/auth/token')
-          .then((res) => res.json())
-          .then((data) => {
-            callback(data.access_token || '', data.expires_in || 3600);
-          })
-          .catch((err) => {
-            console.warn('Failed to retrieve token:', err);
-            callback('', 0);
-          });
+    // Token provider function: fetches 2-legged/public token from server session
+    const getAccessToken = async (callback: (token: string, expires: number) => void) => {
+      try {
+        const { access_token, expires_in } = await getPublicToken();
+        callback(access_token, expires_in);
+      } catch (err: any) {
+        console.error('Failed to obtain viewer access token:', err);
+        setViewerError('Could not obtain access token from server.');
+        setIsLoadingViewer(false);
+        callback('', 0);
       }
     };
 
+    // Official APS initialization options
+    window.Autodesk.Viewing.FeatureFlags?.set?.('DS_ENDPOINTS', true);
+
     const options = {
       env: 'AutodeskProduction',
-      api: 'derivativeV2',
       getAccessToken,
     };
 
@@ -106,8 +105,8 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
       const documentId = 'urn:' + selectedItem.base64Urn;
 
       function onDocumentLoadSuccess(doc: any) {
-        const defaultModel = doc.getRoot().getDefaultGeometry();
-        viewer.loadDocumentNode(doc, defaultModel)
+        const defaultGeometry = doc.getRoot().getDefaultGeometry();
+        viewer.loadDocumentNode(doc, defaultGeometry)
           .then(() => {
             setIsLoadingViewer(false);
           })
@@ -119,7 +118,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
 
       function onDocumentLoadFailure(errorCode: number, errorMsg: string) {
         console.warn(`Autodesk Document.load notice: ${errorMsg} (${errorCode})`);
-        setViewerError(`Model Derivative Status: Error ${errorCode} (${errorMsg || 'Untranslated model derivative'})`);
+        setViewerError(`Model Derivative Load Error (${errorCode}): ${errorMsg || 'Please ensure model is translated'}`);
         setIsLoadingViewer(false);
       }
 
@@ -140,7 +139,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         }
       }
     };
-  }, [selectedItem, accessToken]);
+  }, [selectedItem?.base64Urn]);
 
   const handleExplodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
@@ -173,24 +172,24 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         <div className="flex items-center gap-2 overflow-hidden">
           <Box size={18} className="text-cyan-400 shrink-0" />
           <span className="font-semibold text-slate-800 dark:text-slate-200 truncate text-xs" title={selectedItem?.path || selectedItem?.displayName}>
-            {selectedItem?.path || selectedItem?.displayName || 'Select a Revit file from your Autodesk account'}
+            {selectedItem?.path || selectedItem?.displayName || 'Select a model version from your Autodesk Hub to view in 3D'}
           </span>
         </div>
         {selectedItem && (
           <span className="demo-live-badge shrink-0">
-            {selectedItem.extension || '.rvt'}
+            {selectedItem.extension || '3D Model'}
           </span>
         )}
       </div>
 
       {/* Main 3D Viewport Area */}
       <div className="viewport-canvas-wrapper">
-        {!accessToken ? (
+        {!isAuthenticated ? (
           <div className="viewer-error-overlay">
             <Key size={36} className="text-cyan-400 mb-3" />
             <p className="error-title text-lg font-bold">Autodesk Authentication Required</p>
             <p className="error-desc text-sm text-slate-300 max-w-md text-center mt-1">
-              Sign in with your Autodesk account to read live BIM 360 / ACC Hubs and render 3D Revit models.
+              Sign in with your Autodesk account to read live BIM 360 / ACC Hubs and render 3D models.
             </p>
             <button
               className="btn-autodesk-login mt-4"
@@ -203,9 +202,9 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         ) : !selectedItem ? (
           <div className="viewer-error-overlay">
             <Box size={36} className="text-slate-500 mb-3" />
-            <p className="error-title text-base font-semibold text-slate-300">No Revit Model Selected</p>
+            <p className="error-title text-base font-semibold text-slate-300">No Model Version Selected</p>
             <p className="error-desc text-xs text-slate-400 mt-1">
-              Choose a <code className="text-cyan-400">.rvt</code> file from the left sidebar tree to load its 3D model derivative.
+              Expand Hub &rarr; Project &rarr; Folder &rarr; Item &rarr; Version in the sidebar to load the 3D model.
             </p>
           </div>
         ) : (

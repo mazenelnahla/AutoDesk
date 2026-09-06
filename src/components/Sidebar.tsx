@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -13,8 +13,14 @@ import {
   Clock,
   Database,
   Loader2,
+  History
 } from 'lucide-react';
-import type { APSHub, APSProject, APSItem } from '../types/aps';
+import type { APSHub, APSProject, APSItem, APSVersion } from '../types/aps';
+import {
+  fetchLiveContents,
+  fetchLiveItemVersions,
+  toUrlSafeBase64
+} from '../services/apsData';
 
 interface SidebarProps {
   hubs: APSHub[];
@@ -27,46 +33,51 @@ interface SidebarProps {
   selectedItem: APSItem | null;
   onSelectItem: (item: APSItem) => void;
   isLoading: boolean;
-  accessToken?: string | null;
 }
 
-interface TreeNodeProps {
+interface TreeItemNodeProps {
+  hubId: string;
+  projectId: string;
   item: APSItem;
   parentPath: string;
   selectedItem: APSItem | null;
-  expandedFolders: { [id: string]: boolean };
-  folderContents: { [folderId: string]: APSItem[] };
-  loadingFolders: { [folderId: string]: boolean };
+  expandedNodes: { [id: string]: boolean };
+  subNodes: { [id: string]: APSItem[] };
+  itemVersions: { [itemId: string]: APSVersion[] };
+  loadingNodes: { [id: string]: boolean };
   filterItem: (item: APSItem) => boolean;
-  onToggleFolder: (folderId: string, parentPath: string, e: React.MouseEvent) => void;
-  onSelectItem: (item: APSItem) => void;
+  onToggleNode: (nodeId: string, nodeType: 'folder' | 'item', item: APSItem, parentPath: string, e: React.MouseEvent) => void;
+  onSelectVersion: (version: APSVersion, item: APSItem, fullPath: string) => void;
   formatFileSize: (bytes?: number) => string;
 }
 
-const TreeNode: React.FC<TreeNodeProps> = ({
+const TreeItemNode: React.FC<TreeItemNodeProps> = ({
+  hubId,
+  projectId,
   item,
   parentPath,
   selectedItem,
-  expandedFolders,
-  folderContents,
-  loadingFolders,
+  expandedNodes,
+  subNodes,
+  itemVersions,
+  loadingNodes,
   filterItem,
-  onToggleFolder,
-  onSelectItem,
+  onToggleNode,
+  onSelectVersion,
   formatFileSize,
 }) => {
-  const isSelected = selectedItem?.id === item.id;
-  const isExpanded = !!expandedFolders[item.id];
-  const subItems = folderContents[item.id] || [];
-  const isFolderLoading = !!loadingFolders[item.id];
+  const isExpanded = !!expandedNodes[item.id];
+  const isLoadingSub = !!loadingNodes[item.id];
   const currentPath = item.path || `${parentPath}/${item.displayName}`;
 
   if (item.isFolder) {
+    const folderContents = subNodes[item.id] || [];
+
     return (
       <li className="tree-folder-node">
         <div
           className="folder-row"
-          onClick={(e) => onToggleFolder(item.id, currentPath, e)}
+          onClick={(e) => onToggleNode(item.id, 'folder', item, currentPath, e)}
         >
           {isExpanded ? (
             <ChevronDown size={14} className="tree-arrow" />
@@ -83,29 +94,32 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
         {isExpanded && (
           <div className="pl-4 border-l border-slate-700/40 ml-2 mt-1 space-y-1">
-            {isFolderLoading ? (
+            {isLoadingSub ? (
               <div className="flex items-center gap-2 py-1 px-2 text-xs text-slate-400">
                 <Loader2 size={12} className="animate-spin text-cyan-400" />
-                <span>Loading folder...</span>
+                <span>Loading contents...</span>
               </div>
-            ) : subItems.length === 0 ? (
+            ) : folderContents.length === 0 ? (
               <div className="py-1 px-2 text-xs text-slate-500 italic">
                 Empty folder
               </div>
             ) : (
               <ul className="file-tree-list">
-                {subItems.filter(filterItem).map((subItem) => (
-                  <TreeNode
+                {folderContents.filter(filterItem).map((subItem) => (
+                  <TreeItemNode
                     key={subItem.id}
+                    hubId={hubId}
+                    projectId={projectId}
                     item={subItem}
                     parentPath={currentPath}
                     selectedItem={selectedItem}
-                    expandedFolders={expandedFolders}
-                    folderContents={folderContents}
-                    loadingFolders={loadingFolders}
+                    expandedNodes={expandedNodes}
+                    subNodes={subNodes}
+                    itemVersions={itemVersions}
+                    loadingNodes={loadingNodes}
                     filterItem={filterItem}
-                    onToggleFolder={onToggleFolder}
-                    onSelectItem={onSelectItem}
+                    onToggleNode={onToggleNode}
+                    onSelectVersion={onSelectVersion}
                     formatFileSize={formatFileSize}
                   />
                 ))}
@@ -117,19 +131,26 @@ const TreeNode: React.FC<TreeNodeProps> = ({
     );
   }
 
+  // It's a file item (which can expand into versions)
+  const versions = itemVersions[item.id] || [];
+  const isSelected = selectedItem?.id === item.id || versions.some((v) => selectedItem?.versionUrn === v.id);
+
   return (
-    <li
-      className={`tree-file-node ${isSelected ? 'selected' : ''} ${
-        item.isRevit ? 'is-revit' : ''
-      }`}
-      onClick={() => onSelectItem({ ...item, path: currentPath })}
-    >
-      <div className="file-row">
+    <li className={`tree-item-group ${isSelected ? 'selected' : ''}`}>
+      <div
+        className={`file-row ${isSelected ? 'active-item' : ''}`}
+        onClick={(e) => onToggleNode(item.id, 'item', item, currentPath, e)}
+      >
+        {isExpanded ? (
+          <ChevronDown size={13} className="tree-arrow text-slate-400" />
+        ) : (
+          <ChevronRight size={13} className="tree-arrow text-slate-400" />
+        )}
         <FileCode
           size={16}
           className={item.isRevit ? 'file-icon-revit' : 'file-icon-generic'}
         />
-        <div className="file-details">
+        <div className="file-details flex-1 min-w-0">
           <span className="file-name">{item.displayName}</span>
           <div className="file-meta">
             {item.size ? (
@@ -143,8 +164,47 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             )}
           </div>
         </div>
-        {isSelected && <CheckCircle2 size={16} className="text-cyan-400" />}
       </div>
+
+      {isExpanded && (
+        <div className="pl-4 border-l border-cyan-500/30 ml-3 mt-1 space-y-1">
+          {isLoadingSub ? (
+            <div className="flex items-center gap-2 py-1 px-2 text-xs text-slate-400">
+              <Loader2 size={12} className="animate-spin text-cyan-400" />
+              <span>Loading versions...</span>
+            </div>
+          ) : versions.length === 0 ? (
+            <div className="py-1 px-2 text-xs text-slate-500 italic">
+              No versions available
+            </div>
+          ) : (
+            <ul className="file-tree-list">
+              {versions.map((version) => {
+                const isVersionSelected = selectedItem?.versionUrn === version.id;
+                return (
+                  <li
+                    key={version.id}
+                    className={`tree-version-node ${isVersionSelected ? 'selected-version' : ''}`}
+                    onClick={() => onSelectVersion(version, item, currentPath)}
+                  >
+                    <div className="version-row flex items-center justify-between gap-2 py-1 px-2 rounded cursor-pointer hover:bg-cyan-500/10 transition-colors">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <History size={13} className="text-cyan-400 shrink-0" />
+                        <span className="text-xs text-slate-300 truncate font-mono">
+                          {version.name || 'Version'}
+                        </span>
+                      </div>
+                      {isVersionSelected && (
+                        <CheckCircle2 size={14} className="text-cyan-400 shrink-0" />
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
     </li>
   );
 };
@@ -160,51 +220,87 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedItem,
   onSelectItem,
   isLoading,
-  accessToken,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyRevit, setOnlyRevit] = useState(false);
-  const [expandedFolders, setExpandedFolders] = useState<{ [id: string]: boolean }>({});
-  const [folderContents, setFolderContents] = useState<{ [folderId: string]: APSItem[] }>({});
-  const [loadingFolders, setLoadingFolders] = useState<{ [folderId: string]: boolean }>({});
+  const [expandedNodes, setExpandedNodes] = useState<{ [id: string]: boolean }>({});
+  const [subNodes, setSubNodes] = useState<{ [folderId: string]: APSItem[] }>({});
+  const [itemVersions, setItemVersions] = useState<{ [itemId: string]: APSVersion[] }>({});
+  const [loadingNodes, setLoadingNodes] = useState<{ [id: string]: boolean }>({});
 
-  // Reset folder expansion and contents when switching projects
-  React.useEffect(() => {
-    setExpandedFolders({});
-    setFolderContents({});
-    setLoadingFolders({});
+  // Reset node expansion and contents when switching projects
+  useEffect(() => {
+    setExpandedNodes({});
+    setSubNodes({});
+    setItemVersions({});
+    setLoadingNodes({});
   }, [selectedProject?.id]);
 
-  const toggleFolder = async (folderId: string, parentPath: string, e: React.MouseEvent) => {
+  const handleToggleNode = async (
+    nodeId: string,
+    nodeType: 'folder' | 'item',
+    item: APSItem,
+    parentPath: string,
+    e: React.MouseEvent
+  ) => {
     e.stopPropagation();
-    const willExpand = !expandedFolders[folderId];
-    setExpandedFolders((prev) => ({ ...prev, [folderId]: willExpand }));
+    if (!selectedHub || !selectedProject) return;
 
-    if (willExpand && !folderContents[folderId] && selectedProject && accessToken) {
-      setLoadingFolders((prev) => ({ ...prev, [folderId]: true }));
-      try {
-        const res = await fetch(
-          `/api/data/projects/${selectedProject.id}/folders/${folderId}/contents`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-            },
-          }
-        );
-        if (res.ok) {
-          const data: APSItem[] = await res.json();
-          const itemsWithFullPaths = data.map((d) => ({
-            ...d,
-            path: `${parentPath}/${d.displayName}`,
+    const willExpand = !expandedNodes[nodeId];
+    setExpandedNodes((prev) => ({ ...prev, [nodeId]: willExpand }));
+
+    if (willExpand) {
+      if (nodeType === 'folder' && !subNodes[nodeId]) {
+        setLoadingNodes((prev) => ({ ...prev, [nodeId]: true }));
+        try {
+          const contents = await fetchLiveContents(selectedHub.id, selectedProject.id, nodeId);
+          const mapped = contents.map((c) => ({
+            ...c,
+            path: `${parentPath}/${c.displayName}`,
           }));
-          setFolderContents((prev) => ({ ...prev, [folderId]: itemsWithFullPaths }));
+          setSubNodes((prev) => ({ ...prev, [nodeId]: mapped }));
+        } catch (err) {
+          console.error('Failed to load folder contents:', err);
+        } finally {
+          setLoadingNodes((prev) => ({ ...prev, [nodeId]: false }));
         }
-      } catch (err) {
-        console.error('Error fetching subfolder contents:', err);
-      } finally {
-        setLoadingFolders((prev) => ({ ...prev, [folderId]: false }));
+      } else if (nodeType === 'item') {
+        // Automatically fetch versions for this item
+        if (!itemVersions[nodeId]) {
+          setLoadingNodes((prev) => ({ ...prev, [nodeId]: true }));
+          try {
+            const versions = await fetchLiveItemVersions(selectedHub.id, selectedProject.id, nodeId);
+            setItemVersions((prev) => ({ ...prev, [nodeId]: versions }));
+
+            // If user clicked the item directly, load the newest version
+            if (versions.length > 0) {
+              const latestVersion = versions[0];
+              const safeUrn = toUrlSafeBase64(latestVersion.id);
+              onSelectItem({
+                ...item,
+                path: `${parentPath} (${latestVersion.name})`,
+                versionUrn: latestVersion.id,
+                base64Urn: safeUrn,
+              });
+            }
+          } catch (err) {
+            console.error('Failed to load item versions:', err);
+          } finally {
+            setLoadingNodes((prev) => ({ ...prev, [nodeId]: false }));
+          }
+        }
       }
     }
+  };
+
+  const handleSelectVersion = (version: APSVersion, item: APSItem, fullPath: string) => {
+    const safeUrn = toUrlSafeBase64(version.id);
+    onSelectItem({
+      ...item,
+      path: `${fullPath} (${version.name})`,
+      versionUrn: version.id,
+      base64Urn: safeUrn,
+    });
   };
 
   const filterItem = (item: APSItem): boolean => {
@@ -285,7 +381,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <input
             type="text"
             className="search-input"
-            placeholder="Search Revit (.rvt) files..."
+            placeholder="Search files..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -304,7 +400,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="sidebar-tree-container">
         <div className="tree-header">
           <Database size={14} className="text-cyan-400" />
-          <span>Data Management Tree</span>
+          <span>Hub & Project Hierarchy</span>
         </div>
 
         {isLoading ? (
@@ -318,18 +414,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         ) : (
           <ul className="file-tree-list">
-            {items.filter(filterItem).map((item) => (
-              <TreeNode
+            {selectedHub && selectedProject && items.filter(filterItem).map((item) => (
+              <TreeItemNode
                 key={item.id}
+                hubId={selectedHub.id}
+                projectId={selectedProject.id}
                 item={item}
                 parentPath={rootPath}
                 selectedItem={selectedItem}
-                expandedFolders={expandedFolders}
-                folderContents={folderContents}
-                loadingFolders={loadingFolders}
+                expandedNodes={expandedNodes}
+                subNodes={subNodes}
+                itemVersions={itemVersions}
+                loadingNodes={loadingNodes}
                 filterItem={filterItem}
-                onToggleFolder={toggleFolder}
-                onSelectItem={onSelectItem}
+                onToggleNode={handleToggleNode}
+                onSelectVersion={handleSelectVersion}
                 formatFileSize={formatFileSize}
               />
             ))}

@@ -4,6 +4,7 @@ export interface APSUser {
   emailId: string;
   firstName?: string;
   lastName?: string;
+  picture?: string;
   profileImages?: {
     sizeX20?: string;
     sizeX40?: string;
@@ -24,7 +25,7 @@ export interface APSProject {
   id: string;
   type: 'projects';
   name: string;
-  rootFolderId: string;
+  rootFolderId?: string;
   hubId: string;
 }
 
@@ -43,18 +44,11 @@ export interface APSItem {
   versionUrn?: string;
   base64Urn?: string;
   children?: APSItem[];
+  versions?: APSVersion[];
 }
 
-export interface OAuthTokens {
-  access_token: string;
-  refresh_token?: string;
-  expires_in: number;
-  token_type: string;
-  expires_at: number; // timestamp in ms
-}
-
-export interface APSSettings {
-  clientId: string;
-  redirectUri: string;
-  scopes: string[];
+export interface APSVersion {
+  id: string;
+  name: string;
+  createTime?: string;
 }
