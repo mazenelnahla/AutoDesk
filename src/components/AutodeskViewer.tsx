@@ -23,12 +23,14 @@ interface AutodeskViewerProps {
   selectedItem: APSItem | null;
   isAuthenticated: boolean;
   onLoginRequest?: () => void;
+  onObjectSelected?: (objectData: any | null) => void;
 }
 
 export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
   selectedItem,
   isAuthenticated,
   onLoginRequest,
+  onObjectSelected,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
@@ -41,6 +43,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
   // Initialize Autodesk Viewer JS SDK & Load Document Node
   useEffect(() => {
     if (!selectedItem?.base64Urn) {
+      if (onObjectSelected) onObjectSelected(null);
       return;
     }
 
@@ -51,6 +54,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
 
     setIsLoadingViewer(true);
     setViewerError(null);
+    if (onObjectSelected) onObjectSelected(null);
 
     // Token provider function: fetches 2-legged/public token from server session
     const getAccessToken = async (callback: (token: string, expires: number) => void) => {
@@ -101,6 +105,37 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
 
       viewer.setTheme(isDarkTheme ? 'dark-theme' : 'light-theme');
       viewerRef.current = viewer;
+
+      // Listen for object selection changes in the 3D canvas
+      const onSelectionChanged = (event: any) => {
+        const dbIds = event.dbIdArray;
+        if (!dbIds || dbIds.length === 0) {
+          if (onObjectSelected) onObjectSelected(null);
+          return;
+        }
+
+        const selectedDbId = dbIds[0];
+        viewer.getProperties(
+          selectedDbId,
+          (result: any) => {
+            if (onObjectSelected) {
+              onObjectSelected({
+                dbId: selectedDbId,
+                name: result.name || `Object #${selectedDbId}`,
+                properties: result.properties || [],
+              });
+            }
+          },
+          (err: any) => {
+            console.error('Failed to retrieve properties for dbId ' + selectedDbId, err);
+          }
+        );
+      };
+
+      viewer.addEventListener(
+        window.Autodesk.Viewing.SELECTION_CHANGED_EVENT,
+        onSelectionChanged
+      );
 
       const documentId = 'urn:' + selectedItem.base64Urn;
 

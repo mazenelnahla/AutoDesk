@@ -11,7 +11,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "start": "npm run dev:all"
+    "start": "npm run build && concurrently \"npm run server:dev\" \"npm run dev\"",
+    "serve": "npm run build && node server/index.js"
   },
   "dependencies": {
     "@aps_sdk/authentication": "^1.0.1",

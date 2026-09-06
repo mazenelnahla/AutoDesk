@@ -4,11 +4,13 @@ import { Sidebar } from './components/Sidebar';
 import { AutodeskViewer } from './components/AutodeskViewer';
 import { InspectorPanel } from './components/InspectorPanel';
 import { LoginPage } from './components/LoginPage';
+import { AuthLoadingScreen } from './components/AuthLoadingScreen';
 import type {
   APSHub,
   APSProject,
   APSItem,
   APSUser,
+  ViewerSelectedObject,
 } from './types/aps';
 import {
   fetchUserProfile,
@@ -34,6 +36,9 @@ export function App() {
   const [items, setItems] = useState<APSItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<APSItem | null>(null);
   const [isLoadingTree, setIsLoadingTree] = useState(false);
+
+  // 3D Viewer Object Selection State
+  const [selectedObject, setSelectedObject] = useState<ViewerSelectedObject | null>(null);
 
   // 1. Check current session & fetch profile on load
   const checkSession = useCallback(async () => {
@@ -65,6 +70,7 @@ export function App() {
       setSelectedProject(null);
       setItems([]);
       setSelectedItem(null);
+      setSelectedObject(null);
       return;
     }
 
@@ -82,6 +88,7 @@ export function App() {
           setSelectedProject(null);
           setItems([]);
           setSelectedItem(null);
+          setSelectedObject(null);
         }
       })
       .catch((err) => {
@@ -92,6 +99,7 @@ export function App() {
         setSelectedProject(null);
         setItems([]);
         setSelectedItem(null);
+        setSelectedObject(null);
       })
       .finally(() => {
         setIsLoadingTree(false);
@@ -132,6 +140,7 @@ export function App() {
     if (!user || !selectedProject || !selectedHub) {
       setItems([]);
       setSelectedItem(null);
+      setSelectedObject(null);
       return;
     }
 
@@ -165,16 +174,9 @@ export function App() {
     initiateLogout();
   };
 
-  // If auth is loading, render a sleek loader
+  // If auth is loading, render the modern high-end loading screen
   if (isLoadingAuth) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-slate-950 text-slate-200">
-        <div className="flex flex-col items-center gap-3">
-          <div className="spinner" />
-          <p className="text-sm font-medium text-cyan-400">Authenticating with Autodesk Platform Services...</p>
-        </div>
-      </div>
-    );
+    return <AuthLoadingScreen />;
   }
 
   // If not logged in, render the Login Landing Page
@@ -206,13 +208,22 @@ export function App() {
         <Sidebar
           hubs={hubs}
           selectedHub={selectedHub}
-          onSelectHub={(hub) => setSelectedHub(hub)}
+          onSelectHub={(hub) => {
+            setSelectedHub(hub);
+            setSelectedObject(null);
+          }}
           projects={projects}
           selectedProject={selectedProject}
-          onSelectProject={(proj) => setSelectedProject(proj)}
+          onSelectProject={(proj) => {
+            setSelectedProject(proj);
+            setSelectedObject(null);
+          }}
           items={items}
           selectedItem={selectedItem}
-          onSelectItem={(item) => setSelectedItem(item)}
+          onSelectItem={(item) => {
+            setSelectedItem(item);
+            setSelectedObject(null);
+          }}
           isLoading={isLoadingTree}
         />
 
@@ -221,11 +232,13 @@ export function App() {
           selectedItem={selectedItem}
           isAuthenticated={!!user}
           onLoginRequest={handleLogin}
+          onObjectSelected={(obj) => setSelectedObject(obj)}
         />
 
-        {/* Right Metadata Inspector */}
+        {/* Right Metadata & Properties Inspector */}
         <InspectorPanel
           selectedItem={selectedItem}
+          selectedObject={selectedObject}
         />
       </div>
     </div>
@@ -233,3 +246,4 @@ export function App() {
 }
 
 export default App;
+

@@ -52,3 +52,19 @@ export interface APSVersion {
   name: string;
   createTime?: string;
 }
+
+export interface ViewerProperty {
+  displayName: string;
+  displayValue: any;
+  displayCategory: string;
+  attributeName?: string;
+  type?: number;
+  units?: string;
+  hidden?: boolean;
+}
+
+export interface ViewerSelectedObject {
+  dbId: number;
+  name: string;
+  properties: ViewerProperty[];
+}
