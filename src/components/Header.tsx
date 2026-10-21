@@ -6,7 +6,10 @@ import {
   User as UserIcon,
   ChevronDown,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  FileSpreadsheet,
+  PanelLeft,
+  PanelRight
 } from 'lucide-react';
 import type { APSUser } from '../types/aps';
 
@@ -16,6 +19,12 @@ interface HeaderProps {
   onLogin: () => void;
   onLogout: () => void;
   isLoadingAuth: boolean;
+  onOpenExcelModal?: () => void;
+  totalScheduleCount?: number;
+  isLeftCollapsed?: boolean;
+  onToggleLeftSidebar?: () => void;
+  isRightCollapsed?: boolean;
+  onToggleRightSidebar?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,6 +33,12 @@ export const Header: React.FC<HeaderProps> = ({
   onLogin,
   onLogout,
   isLoadingAuth,
+  onOpenExcelModal,
+  totalScheduleCount = 0,
+  isLeftCollapsed = false,
+  onToggleLeftSidebar,
+  isRightCollapsed = false,
+  onToggleRightSidebar,
 }) => {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
 
@@ -35,12 +50,49 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="logo-badge">APS</div>
         </div>
         <div className="brand-titles">
-          <h1 className="brand-name">Autodesk Platform Services</h1>
-          <p className="brand-subtitle">Revit BIM Explorer & 3D Model Viewer</p>
+          <h1 className="brand-name">Buildspace</h1>
+          <p className="brand-subtitle">Construction intelligence workspace</p>
         </div>
       </div>
 
       <div className="header-actions">
+        {/* Sidebar Panel Toggles */}
+        {isAuthenticated && onToggleLeftSidebar && onToggleRightSidebar && (
+          <div className="flex items-center gap-1 bg-slate-900/60 p-0.5 rounded-lg border border-slate-800">
+            <button
+              type="button"
+              className={`btn-header-panel-toggle ${!isLeftCollapsed ? 'active' : ''}`}
+              onClick={onToggleLeftSidebar}
+              title={isLeftCollapsed ? 'Open Left Sidebar (Files & AI)' : 'Collapse Left Sidebar'}
+            >
+              <PanelLeft size={16} />
+            </button>
+            <button
+              type="button"
+              className={`btn-header-panel-toggle ${!isRightCollapsed ? 'active' : ''}`}
+              onClick={onToggleRightSidebar}
+              title={isRightCollapsed ? 'Open Right Inspector Panel' : 'Collapse Right Inspector Panel'}
+            >
+              <PanelRight size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* Global Upload / Manage Excel Button */}
+        {isAuthenticated && onOpenExcelModal && (
+          <button
+            className="btn-header-excel"
+            onClick={onOpenExcelModal}
+            title="Import and manage the schedule for the current project"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-400" />
+            <span>Import schedule</span>
+            {totalScheduleCount > 0 && (
+              <span className="header-excel-count-pill">{totalScheduleCount}</span>
+            )}
+          </button>
+        )}
+
         {/* Live Mode Auth Status or Sign In Button */}
         <div className="auth-section">
           {isAuthenticated ? (

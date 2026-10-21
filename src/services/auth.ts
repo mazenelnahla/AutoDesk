@@ -17,7 +17,7 @@ export async function fetchUserProfile(): Promise<APSUser> {
 }
 
 export function initiateLogin(): void {
-  window.location.replace('/api/auth/login');
+  window.location.href = '/api/auth/login';
 }
 
 export function initiateLogout(): void {

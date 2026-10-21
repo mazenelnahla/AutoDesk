@@ -38,7 +38,11 @@ router.get('/hubs/:hub_id/projects', async (req, res, next) => {
         id: project.id,
         name: project.attributes?.name || 'Unnamed Project',
         type: 'projects',
-        hubId: req.params.hub_id
+        hubId: req.params.hub_id,
+        rootFolderId: project.relationships?.rootFolder?.data?.id || project.attributes?.rootFolderId,
+        projectType: project.attributes?.extension?.data?.projectType || (project.id.startsWith('b.') ? 'BIM 360 Docs' : 'Autodesk Construction Cloud'),
+        status: project.attributes?.status || 'active',
+        attributes: project.attributes || {}
       }))
     );
   } catch (err) {
@@ -69,6 +73,11 @@ router.get('/hubs/:hub_id/projects/:project_id/contents', async (req, res, next)
           entry.attributes?.extension?.type?.includes('revit') ||
           false;
 
+        const tipVersionUrn = entry.relationships?.tip?.data?.id || undefined;
+        const base64Urn = tipVersionUrn
+          ? Buffer.from(tipVersionUrn).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+          : undefined;
+
         return {
           id: entry.id,
           name: displayName,
@@ -78,11 +87,22 @@ router.get('/hubs/:hub_id/projects/:project_id/contents', async (req, res, next)
           isRevit: isRevit,
           extension: extension,
           size: entry.attributes?.storageSize || 0,
-          lastModified: entry.attributes?.lastModifiedTime || entry.attributes?.createTime
+          lastModified: entry.attributes?.lastModifiedTime || entry.attributes?.createTime,
+          versionUrn: tipVersionUrn,
+          base64Urn: base64Urn
         };
       })
     );
   } catch (err) {
+    if (err.message && err.message.includes('Inconsistent hub and project ids')) {
+      console.warn(
+        `[APS] Mismatched hub & project IDs (hub: ${req.params.hub_id}, project: ${req.params.project_id}): ${err.message}`
+      );
+      return res.status(400).json({
+        error: 'Inconsistent hub and project ids',
+        message: 'The requested project does not belong to the specified hub.'
+      });
+    }
     next(err);
   }
 });

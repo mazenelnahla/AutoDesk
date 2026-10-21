@@ -27,6 +27,22 @@ export interface APSProject {
   name: string;
   rootFolderId?: string;
   hubId: string;
+  hubName?: string;
+  projectType?: string;
+  region?: string;
+  status?: string;
+  attributes?: Record<string, any>;
+}
+
+export interface ProjectSection {
+  id: string;
+  name: string;
+  category?: string;
+  source: 'model' | 'project' | 'custom';
+  elementCount: number;
+  dbIds?: number[];
+  assignedIdents: string[];
+  completionPercentage?: number;
 }
 
 export interface APSItem {
@@ -68,3 +84,33 @@ export interface ViewerSelectedObject {
   name: string;
   properties: ViewerProperty[];
 }
+
+export type ScheduleStatus = 'not_started' | 'in_progress' | 'completed' | 'delayed';
+
+export interface ElementScheduleData {
+  saipemIdent: string;
+  projectId?: string;
+  projectName?: string;
+  modelUrn?: string;
+  dbId?: number;
+  elementName?: string;
+  category?: string;
+  startDate?: string;
+  endDate?: string;
+  completionPercentage: number; // 0 to 100
+  status: ScheduleStatus;
+  assignee?: string;
+  notes?: string;
+  customFields?: Record<string, string>;
+  updatedAt?: string;
+}
+
+export interface ScannedModelIdentInfo {
+  dbIds: number[];
+  name?: string;
+  category?: string;
+}
+
+export type ScannedModelIdentMap = Record<string, ScannedModelIdentInfo>;
+
+

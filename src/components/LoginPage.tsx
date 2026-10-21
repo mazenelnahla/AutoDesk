@@ -34,7 +34,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <Box className="logo-icon text-cyan-400" size={24} />
           <div className="logo-badge">APS</div>
         </div>
-        <span className="login-header-title">Autodesk Platform Services</span>
+        <span className="login-header-title">BUILDSPACE / CONSTRUCTION INTELLIGENCE</span>
       </header>
 
       {/* Main Login Hero Card */}
@@ -44,9 +44,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             <Box size={42} className="text-cyan-400 animate-pulse" />
           </div>
 
-          <h1 className="login-title">Autodesk BIM Explorer</h1>
+          <h1 className="login-title">Your model. Your progress.<br /><em>One clear view.</em></h1>
           <p className="login-subtitle">
-            Sign in with your Autodesk account to access BIM 360 & ACC hubs, explore 3D Revit models, and inspect rich BIM metadata.
+            Bring your construction data into focus. Open your ACC models, connect element schedules, and see exactly where your project stands.
           </p>
 
           {authError && (
@@ -73,14 +73,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             ) : (
               <>
                 <LogIn size={20} />
-                <span>Sign in with Autodesk</span>
+                <span>Continue with Autodesk</span>
               </>
             )}
           </button>
 
           <div className="login-security-notice">
             <ShieldCheck size={15} className="text-cyan-400" />
-            <span>OAuth 2.0 Secure Authentication directly via Autodesk Portal</span>
+            <span>Secure sign-in with your Autodesk account</span>
           </div>
 
           {/* Features Grid */}
@@ -90,8 +90,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <FolderTree size={20} className="text-cyan-400" />
               </div>
               <div>
-                <h3>Cloud Hubs & Projects</h3>
-                <p>Browse your BIM 360 and ACC folders and Revit files seamlessly.</p>
+                <h3>Open your project</h3>
+                <p>Browse ACC and BIM 360 projects, folders, and model files.</p>
               </div>
             </div>
 
@@ -100,8 +100,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <Layers size={20} className="text-indigo-400" />
               </div>
               <div>
-                <h3>3D Model Viewer</h3>
-                <p>Render interactive 3D models with Autodesk Viewer SDK engine.</p>
+                <h3>Explore every element</h3>
+                <p>Explore beams, walls, and model properties in an interactive 3D view.</p>
               </div>
             </div>
 
@@ -110,8 +110,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <FileCheck size={20} className="text-emerald-400" />
               </div>
               <div>
-                <h3>Revit BIM Inspector</h3>
-                <p>Inspect categories, sheets, levels, and element properties in real-time.</p>
+                <h3>Connect your schedule</h3>
+                <p>Link progress, start dates, and finish dates using Saipem_IDENT.</p>
               </div>
             </div>
 
@@ -120,8 +120,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <Zap size={20} className="text-amber-400" />
               </div>
               <div>
-                <h3>Instant Live Data</h3>
-                <p>Live synchronized authorization tokens & Data Management APIs.</p>
+                <h3>Ask your model</h3>
+                <p>Query model elements and project data with your local AI assistant.</p>
               </div>
             </div>
           </div>
@@ -130,7 +130,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
       {/* Footer */}
       <footer className="login-footer">
-        <p>Powered by Autodesk Platform Services & Express API Proxy</p>
+        <p>BUILDSPACE · Powered by Autodesk Platform Services</p>
       </footer>
     </div>
   );

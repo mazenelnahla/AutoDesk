@@ -1,11 +1,14 @@
 import express from 'express';
+import http from 'http';
 import session from 'cookie-session';
 import cors from 'cors';
 import { PORT, SERVER_SESSION_SECRET } from './config.js';
 import authRoutes from './routes/auth.js';
 import hubsRoutes from './routes/hubs.js';
+import llmRoutes from './routes/llm.js';
 
 const app = express();
+const server = http.createServer(app);
 
 app.use(
   cors({
@@ -17,8 +20,10 @@ app.use(
 );
 
 app.use(session({
+  name: 'session',
   secret: SERVER_SESSION_SECRET,
-  maxAge: 24 * 60 * 60 * 1000
+  maxAge: 24 * 60 * 60 * 1000,
+  signed: true,
 }));
 
 app.use(express.json());
@@ -34,26 +39,36 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Static files & fallback for production / unified port 3001
-app.use(express.static('dist'));
-
-// Routes matching aps-hubs-browser-nodejs API
+// API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/llm', llmRoutes);
 app.use('/api', hubsRoutes);
 
-// Fallback for SPA routing in Express 5
-app.use((req, res, next) => {
-  if (req.method === 'GET' && !req.path.startsWith('/api')) {
-    return res.sendFile('index.html', { root: 'dist' }, (err) => {
-      if (err) res.redirect('http://localhost:5173/');
-    });
-  }
-  next();
-});
+// Frontend: In development, use Vite with HMR directly on port 3001. In production, serve dist.
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static('dist'));
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
+      return res.sendFile('index.html', { root: 'dist' });
+    }
+    next();
+  });
+} else {
+  const { createServer: createViteServer } = await import('vite');
+  const vite = await createViteServer({
+    server: {
+      middlewareMode: true,
+      ws: { server },
+    },
+    appType: 'spa',
+  });
+  app.use(vite.middlewares);
+}
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`====================================================`);
-  console.log(`  APS Backend running on http://localhost:${PORT}`);
+  console.log(`  APS App running on http://localhost:${PORT}`);
+  console.log(`  HMR & Live-reload: Active on port ${PORT}`);
   console.log(`  Health Check: http://localhost:${PORT}/api/health`);
   console.log(`====================================================`);
 });

@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Folder,
   FolderOpen,
   FileCode,
   Search,
   ChevronRight,
+  ChevronLeft,
   ChevronDown,
   Building2,
   HardDrive,
@@ -12,21 +13,33 @@ import {
   Clock,
   Database,
   Loader2,
-  History,
   ArrowLeft,
   LayoutList,
   FolderTree,
   Home,
   X,
   Layers,
-  Sparkles
+  MoreHorizontal,
+  Bot,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
-import type { APSHub, APSProject, APSItem, APSVersion } from '../types/aps';
+import type {
+  APSHub,
+  APSProject,
+  APSItem,
+  APSVersion,
+  ViewerSelectedObject,
+  ElementScheduleData,
+  ScannedModelIdentMap,
+  ProjectSection
+} from '../types/aps';
 import {
   fetchLiveContents,
   fetchLiveItemVersions,
   toUrlSafeBase64
 } from '../services/apsData';
+import { ChatbotSection } from './ChatbotSection';
 
 interface SidebarProps {
   hubs: APSHub[];
@@ -39,6 +52,16 @@ interface SidebarProps {
   selectedItem: APSItem | null;
   onSelectItem: (item: APSItem) => void;
   isLoading: boolean;
+  selectedObject?: ViewerSelectedObject | null;
+  scheduleDataMap?: Record<string, ElementScheduleData>;
+  modelIdentsMap?: ScannedModelIdentMap;
+  modelSections?: ProjectSection[];
+  isIsolated?: boolean;
+  isolatedDbIds?: number[] | null;
+  onIsolatePart?: (dbId?: number, ident?: string, dbIds?: number[]) => void;
+  onClearIsolation?: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 interface TreeItemNodeProps {
@@ -49,11 +72,10 @@ interface TreeItemNodeProps {
   selectedItem: APSItem | null;
   expandedNodes: { [id: string]: boolean };
   subNodes: { [id: string]: APSItem[] };
-  itemVersions: { [itemId: string]: APSVersion[] };
   loadingNodes: { [id: string]: boolean };
   filterItem: (item: APSItem) => boolean;
-  onToggleNode: (nodeId: string, nodeType: 'folder' | 'item', item: APSItem, parentPath: string, e: React.MouseEvent) => void;
-  onSelectVersion: (version: APSVersion, item: APSItem, fullPath: string) => void;
+  onToggleFolder: (folderId: string, parentPath: string, e: React.MouseEvent) => void;
+  onSelectModel: (item: APSItem, parentPath: string) => void;
   formatFileSize: (bytes?: number) => string;
 }
 
@@ -65,11 +87,10 @@ const TreeItemNode: React.FC<TreeItemNodeProps> = ({
   selectedItem,
   expandedNodes,
   subNodes,
-  itemVersions,
   loadingNodes,
   filterItem,
-  onToggleNode,
-  onSelectVersion,
+  onToggleFolder,
+  onSelectModel,
   formatFileSize,
 }) => {
   const isExpanded = !!expandedNodes[item.id];
@@ -83,14 +104,14 @@ const TreeItemNode: React.FC<TreeItemNodeProps> = ({
       <li className="tree-node tree-folder-node">
         <div
           className={`folder-row ${isExpanded ? 'expanded' : ''}`}
-          onClick={(e) => onToggleNode(item.id, 'folder', item, currentPath, e)}
+          onClick={(e) => onToggleFolder(item.id, currentPath, e)}
         >
           <button
             type="button"
             className="tree-expand-btn"
             onClick={(e) => {
               e.stopPropagation();
-              onToggleNode(item.id, 'folder', item, currentPath, e);
+              onToggleFolder(item.id, currentPath, e);
             }}
             aria-label="Expand folder"
           >
@@ -138,11 +159,10 @@ const TreeItemNode: React.FC<TreeItemNodeProps> = ({
                     selectedItem={selectedItem}
                     expandedNodes={expandedNodes}
                     subNodes={subNodes}
-                    itemVersions={itemVersions}
                     loadingNodes={loadingNodes}
                     filterItem={filterItem}
-                    onToggleNode={onToggleNode}
-                    onSelectVersion={onSelectVersion}
+                    onToggleFolder={onToggleFolder}
+                    onSelectModel={onSelectModel}
                     formatFileSize={formatFileSize}
                   />
                 ))}
@@ -154,35 +174,18 @@ const TreeItemNode: React.FC<TreeItemNodeProps> = ({
     );
   }
 
-  // File item
-  const versions = itemVersions[item.id] || [];
+  // File / Model item
   const isSelected =
     selectedItem?.id === item.id ||
-    versions.some((v) => selectedItem?.versionUrn === v.id);
+    (item.versionUrn && selectedItem?.versionUrn === item.versionUrn);
+  const isLoading = !!loadingNodes[item.id];
 
   return (
     <li className={`tree-node tree-file-node ${isSelected ? 'selected' : ''}`}>
       <div
         className={`file-row ${isSelected ? 'active-item' : ''}`}
-        onClick={(e) => {
-          onToggleNode(item.id, 'item', item, currentPath, e);
-        }}
+        onClick={() => onSelectModel(item, parentPath)}
       >
-        <button
-          type="button"
-          className="tree-expand-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleNode(item.id, 'item', item, currentPath, e);
-          }}
-          title="Toggle model versions"
-        >
-          {isExpanded ? (
-            <ChevronDown size={13} className="tree-arrow text-cyan-400" />
-          ) : (
-            <ChevronRight size={13} className="tree-arrow text-slate-400" />
-          )}
-        </button>
         <div className={`file-icon-wrapper ${item.isRevit ? 'revit-wrapper' : 'generic-wrapper'}`}>
           <FileCode
             size={15}
@@ -210,52 +213,14 @@ const TreeItemNode: React.FC<TreeItemNodeProps> = ({
             )}
           </div>
         </div>
-      </div>
-
-      {isExpanded && (
-        <div className="tree-children pl-4 border-l-2 border-cyan-500/40 ml-3.5 my-1.5 space-y-1">
-          {isLoadingSub ? (
-            <div className="flex items-center gap-2 py-2 px-2.5 text-xs text-slate-400 bg-slate-900/40 rounded-md">
-              <Loader2 size={13} className="animate-spin text-cyan-400" />
-              <span>Fetching model versions...</span>
-            </div>
-          ) : versions.length === 0 ? (
-            <div className="py-2 px-3 text-xs text-slate-500 italic bg-slate-900/30 rounded-md">
-              No version history
-            </div>
-          ) : (
-            <ul className="file-tree-list">
-              {versions.map((version) => {
-                const isVersionSelected = selectedItem?.versionUrn === version.id;
-                return (
-                  <li
-                    key={version.id}
-                    className={`tree-version-node ${isVersionSelected ? 'selected-version' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectVersion(version, item, currentPath);
-                    }}
-                  >
-                    <div className="version-row flex items-center justify-between gap-2 py-1.5 px-2.5 rounded-md cursor-pointer transition-all">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <History size={13} className="text-cyan-400 shrink-0" />
-                        <span className="text-xs text-slate-300 truncate font-mono">
-                          {version.name || 'Version'}
-                        </span>
-                      </div>
-                      {isVersionSelected ? (
-                        <CheckCircle2 size={14} className="text-cyan-400 shrink-0" />
-                      ) : (
-                        <span className="text-[10px] text-slate-500 font-mono">Load</span>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+        <div className="file-action-status shrink-0 flex items-center">
+          {isLoading ? (
+            <Loader2 size={14} className="animate-spin text-cyan-400" />
+          ) : isSelected ? (
+            <CheckCircle2 size={15} className="text-cyan-400" />
+          ) : null}
         </div>
-      )}
+      </div>
     </li>
   );
 };
@@ -271,10 +236,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedItem,
   onSelectItem,
   isLoading,
+  selectedObject,
+  scheduleDataMap = {},
+  modelIdentsMap = {},
+  modelSections = [],
+  isIsolated = false,
+  isolatedDbIds = null,
+  onIsolatePart = () => {},
+  onClearIsolation = () => {},
+  isCollapsed = false,
+  onToggleCollapse,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [onlyRevit, setOnlyRevit] = useState(false);
   const [viewMode, setViewMode] = useState<'window' | 'tree'>('window');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'explorer' | 'ai_chat'>('explorer');
+  const [isWideMode, setIsWideMode] = useState(false);
 
   // Window drilldown breadcrumbs history: list of { id, name, path }
   const [folderPathHistory, setFolderPathHistory] = useState<Array<{ id: string | null; name: string }>>([
@@ -286,15 +262,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [itemVersions, setItemVersions] = useState<{ [itemId: string]: APSVersion[] }>({});
   const [loadingNodes, setLoadingNodes] = useState<{ [id: string]: boolean }>({});
   const [loadingFolderContents, setLoadingFolderContents] = useState<boolean>(false);
+  const [isBreadcrumbDropdownOpen, setIsBreadcrumbDropdownOpen] = useState<boolean>(false);
+  const breadcrumbDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Reset folder navigation and cache when project changes
+  // Close breadcrumb dropdown when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (
+        breadcrumbDropdownRef.current &&
+        !breadcrumbDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsBreadcrumbDropdownOpen(false);
+      }
+    };
+    if (isBreadcrumbDropdownOpen) {
+      document.addEventListener('mousedown', handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [isBreadcrumbDropdownOpen]);
+
+  // Reset folder navigation and cache when project or hub changes
   useEffect(() => {
     setFolderPathHistory([{ id: null, name: selectedProject ? selectedProject.name : 'Project Root' }]);
     setExpandedNodes({});
     setSubNodes({});
     setItemVersions({});
     setLoadingNodes({});
-  }, [selectedProject?.id]);
+  }, [selectedProject?.id, selectedHub?.id]);
 
   const rootPath = selectedHub && selectedProject ? `/${selectedHub.name}/${selectedProject.name}` : '';
   const currentFolder = folderPathHistory[folderPathHistory.length - 1];
@@ -302,6 +298,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Load folder contents for window view drilldown
   const openFolderInWindow = async (folder: APSItem) => {
     if (!selectedHub || !selectedProject) return;
+    if (selectedProject.hubId && selectedProject.hubId !== selectedHub.id) return;
 
     setFolderPathHistory((prev) => [...prev, { id: folder.id, name: folder.displayName }]);
 
@@ -332,75 +329,91 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setFolderPathHistory((prev) => prev.slice(0, index + 1));
   };
 
-  const handleToggleNode = async (
-    nodeId: string,
-    nodeType: 'folder' | 'item',
-    item: APSItem,
+  const handleToggleFolder = async (
+    folderId: string,
     parentPath: string,
     e: React.MouseEvent
   ) => {
     e.stopPropagation();
     if (!selectedHub || !selectedProject) return;
+    if (selectedProject.hubId && selectedProject.hubId !== selectedHub.id) return;
 
-    const willExpand = !expandedNodes[nodeId];
-    setExpandedNodes((prev) => ({ ...prev, [nodeId]: willExpand }));
+    const willExpand = !expandedNodes[folderId];
+    setExpandedNodes((prev) => ({ ...prev, [folderId]: willExpand }));
 
-    if (willExpand) {
-      if (nodeType === 'folder' && !subNodes[nodeId]) {
-        setLoadingNodes((prev) => ({ ...prev, [nodeId]: true }));
-        try {
-          const contents = await fetchLiveContents(selectedHub.id, selectedProject.id, nodeId);
-          const mapped = contents.map((c) => ({
-            ...c,
-            path: `${parentPath}/${c.displayName}`,
-          }));
-          setSubNodes((prev) => ({ ...prev, [nodeId]: mapped }));
-        } catch (err) {
-          console.error('Failed to load folder contents:', err);
-        } finally {
-          setLoadingNodes((prev) => ({ ...prev, [nodeId]: false }));
-        }
-      } else if (nodeType === 'item') {
-        if (!itemVersions[nodeId]) {
-          setLoadingNodes((prev) => ({ ...prev, [nodeId]: true }));
-          try {
-            const versions = await fetchLiveItemVersions(selectedHub.id, selectedProject.id, nodeId);
-            setItemVersions((prev) => ({ ...prev, [nodeId]: versions }));
-
-            if (versions.length > 0) {
-              const latestVersion = versions[0];
-              const safeUrn = toUrlSafeBase64(latestVersion.id);
-              onSelectItem({
-                ...item,
-                path: `${parentPath} (${latestVersion.name})`,
-                versionUrn: latestVersion.id,
-                base64Urn: safeUrn,
-              });
-            }
-          } catch (err) {
-            console.error('Failed to load item versions:', err);
-          } finally {
-            setLoadingNodes((prev) => ({ ...prev, [nodeId]: false }));
-          }
-        }
+    if (willExpand && !subNodes[folderId]) {
+      setLoadingNodes((prev) => ({ ...prev, [folderId]: true }));
+      try {
+        const contents = await fetchLiveContents(selectedHub.id, selectedProject.id, folderId);
+        const mapped = contents.map((c) => ({
+          ...c,
+          path: `${parentPath}/${c.displayName}`,
+        }));
+        setSubNodes((prev) => ({ ...prev, [folderId]: mapped }));
+      } catch (err) {
+        console.error('Failed to load folder contents:', err);
+      } finally {
+        setLoadingNodes((prev) => ({ ...prev, [folderId]: false }));
       }
     }
   };
 
-  const handleSelectVersion = (version: APSVersion, item: APSItem, fullPath: string) => {
-    const safeUrn = toUrlSafeBase64(version.id);
-    onSelectItem({
-      ...item,
-      path: `${fullPath} (${version.name})`,
-      versionUrn: version.id,
-      base64Urn: safeUrn,
-    });
+  const handleSelectModel = async (item: APSItem, parentPath: string) => {
+    const fullPath = item.path || `${parentPath}/${item.displayName}`;
+
+    // If item already has versionUrn and base64Urn, select immediately
+    if (item.versionUrn && item.base64Urn) {
+      onSelectItem({
+        ...item,
+        path: fullPath,
+      });
+      return;
+    }
+
+    // If cached versions exist
+    const cached = itemVersions[item.id];
+    if (cached && cached.length > 0) {
+      const latest = cached[0];
+      const safeUrn = toUrlSafeBase64(latest.id);
+      onSelectItem({
+        ...item,
+        path: fullPath,
+        versionUrn: latest.id,
+        base64Urn: safeUrn,
+      });
+      return;
+    }
+
+    // Otherwise fetch version
+    if (!selectedHub || !selectedProject) return;
+    setLoadingNodes((prev) => ({ ...prev, [item.id]: true }));
+    try {
+      const versions = await fetchLiveItemVersions(selectedHub.id, selectedProject.id, item.id);
+      setItemVersions((prev) => ({ ...prev, [item.id]: versions }));
+
+      if (versions.length > 0) {
+        const latest = versions[0];
+        const safeUrn = toUrlSafeBase64(latest.id);
+        onSelectItem({
+          ...item,
+          path: fullPath,
+          versionUrn: latest.id,
+          base64Urn: safeUrn,
+        });
+      } else {
+        onSelectItem({
+          ...item,
+          path: fullPath,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load item versions:', err);
+    } finally {
+      setLoadingNodes((prev) => ({ ...prev, [item.id]: false }));
+    }
   };
 
   const filterItem = (item: APSItem): boolean => {
-    if (onlyRevit && !item.isFolder && !item.isRevit) {
-      return false;
-    }
     if (searchQuery.trim()) {
       return item.displayName.toLowerCase().includes(searchQuery.toLowerCase());
     }
@@ -420,70 +433,152 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const fileCount = filteredWindowItems.filter((i) => !i.isFolder).length;
 
   return (
-    <aside className="sidebar-container">
-      {/* Top Hubs & Projects Selector Header */}
-      <div className="sidebar-section">
-        <div className="selector-group">
-          <label className="selector-label">
-            <Building2 size={13} className="text-cyan-400" />
-            <span>ACC / BIM 360 Hub</span>
-          </label>
-          <div className="select-wrapper">
-            <select
-              className="sidebar-select"
-              value={selectedHub?.id || ''}
-              onChange={(e) => {
-                const h = hubs.find((hub) => hub.id === e.target.value);
-                if (h) onSelectHub(h);
-              }}
-              disabled={hubs.length === 0}
-            >
-              {hubs.length === 0 ? (
-                <option value="">No Hubs Connected</option>
-              ) : (
-                hubs.map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name} ({h.hubType.toUpperCase()})
-                  </option>
-                ))
-              )}
-            </select>
-            <ChevronDown size={14} className="select-arrow" />
-          </div>
+    <aside className={`sidebar-container ${isWideMode ? 'sidebar-wide' : ''} ${activeSidebarTab === 'ai_chat' ? 'full-chatbot-active' : ''} ${isCollapsed ? 'sidebar-collapsed' : ''}`}>
+      {/* Vertical Side Navigation Buttons Rail */}
+      <div className="sidebar-side-rail">
+        <div className="rail-buttons-top">
+          <button
+            type="button"
+            className={`side-rail-btn ${activeSidebarTab === 'explorer' ? 'active' : ''}`}
+            onClick={() => setActiveSidebarTab('explorer')}
+            title="BIM Model Explorer & Files"
+          >
+            <FolderTree size={18} />
+            <span className="side-rail-label">Files</span>
+          </button>
+
+          <button
+            type="button"
+            className={`side-rail-btn ${activeSidebarTab === 'ai_chat' ? 'active' : ''}`}
+            onClick={() => setActiveSidebarTab('ai_chat')}
+            title="Full AI Chatbot (LM Studio)"
+          >
+            <div className="side-rail-icon-wrap">
+              <Bot size={18} />
+              <span className="side-rail-status-dot" />
+            </div>
+            <span className="side-rail-label">AI Chat</span>
+          </button>
         </div>
 
-        <div className="selector-group">
-          <label className="selector-label">
-            <HardDrive size={13} className="text-indigo-400" />
-            <span>Active Project</span>
-          </label>
-          <div className="select-wrapper">
-            <select
-              className="sidebar-select"
-              value={selectedProject?.id || ''}
-              onChange={(e) => {
-                const p = projects.find((proj) => proj.id === e.target.value);
-                if (p) onSelectProject(p);
-              }}
-              disabled={!selectedHub || projects.length === 0}
+        <div className="rail-buttons-bottom">
+          {onToggleCollapse && (
+            <button
+              type="button"
+              className="side-rail-btn side-rail-collapse-btn"
+              onClick={onToggleCollapse}
+              title="Collapse Left Sidebar"
             >
-              {projects.length === 0 ? (
-                <option value="">No Projects Found</option>
-              ) : (
-                projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))
-              )}
-            </select>
-            <ChevronDown size={14} className="select-arrow" />
-          </div>
+              <ChevronLeft size={16} />
+            </button>
+          )}
+
+          <button
+            type="button"
+            className={`side-rail-btn side-rail-size-btn ${isWideMode ? 'active' : ''}`}
+            onClick={() => setIsWideMode(!isWideMode)}
+            title={isWideMode ? 'Standard sidebar width' : 'Expand sidebar width'}
+          >
+            {isWideMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="sidebar-search-bar">
+      {/* Main Content Pane */}
+      <div className="sidebar-main-content">
+        {activeSidebarTab === 'ai_chat' ? (
+          <div className="full-chatbot-pane">
+            <ChatbotSection
+              selectedItem={selectedItem}
+              selectedProject={selectedProject}
+              selectedObject={selectedObject || null}
+              scheduleDataMap={scheduleDataMap}
+              modelIdentsMap={modelIdentsMap}
+              modelSections={modelSections}
+              isIsolated={isIsolated}
+              isolatedDbIds={isolatedDbIds}
+              onIsolatePart={onIsolatePart}
+              onClearIsolation={onClearIsolation}
+              onToggleCollapse={onToggleCollapse}
+            />
+          </div>
+        ) : (
+          <div className="sidebar-explorer-pane">
+            {/* Top Hubs & Projects Selector Header */}
+            <div className="sidebar-section">
+              <div className="selector-group">
+                <div className="flex items-center justify-between">
+                  <label className="selector-label">
+                    <Building2 size={13} className="text-cyan-400" />
+                    <span>ACC / BIM 360 Hub</span>
+                  </label>
+                  {onToggleCollapse && (
+                    <button
+                      type="button"
+                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                      onClick={onToggleCollapse}
+                      title="Collapse Left Sidebar"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                  )}
+                </div>
+                <div className="select-wrapper">
+                  <select
+                    className="sidebar-select"
+                    value={selectedHub?.id || ''}
+                    onChange={(e) => {
+                      const h = hubs.find((hub) => hub.id === e.target.value);
+                      if (h) onSelectHub(h);
+                    }}
+                    disabled={hubs.length === 0}
+                  >
+                    {hubs.length === 0 ? (
+                      <option value="">No Hubs Connected</option>
+                    ) : (
+                      hubs.map((h) => (
+                        <option key={h.id} value={h.id}>
+                          {h.name} ({h.hubType.toUpperCase()})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  <ChevronDown size={14} className="select-arrow" />
+                </div>
+              </div>
+
+              <div className="selector-group">
+                <label className="selector-label">
+                  <HardDrive size={13} className="text-indigo-400" />
+                  <span>Active Project</span>
+                </label>
+                <div className="select-wrapper">
+                  <select
+                    className="sidebar-select"
+                    value={selectedProject?.id || ''}
+                    onChange={(e) => {
+                      const p = projects.find((proj) => proj.id === e.target.value);
+                      if (p) onSelectProject(p);
+                    }}
+                    disabled={!selectedHub || projects.length === 0}
+                  >
+                    {projects.length === 0 ? (
+                      <option value="">No Projects Found</option>
+                    ) : (
+                      projects.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  <ChevronDown size={14} className="select-arrow" />
+                </div>
+              </div>
+            </div>
+
+            {/* Filter and Search Bar */}
+            <div className="sidebar-search-bar">
         <div className="search-input-wrapper">
           <Search size={14} className="search-icon" />
           <input
@@ -504,14 +599,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           )}
         </div>
-        <button
-          className={`filter-badge-btn ${onlyRevit ? 'active' : ''}`}
-          onClick={() => setOnlyRevit(!onlyRevit)}
-          title="Show only .rvt Revit 3D models"
-        >
-          <Sparkles size={12} />
-          <span>.RVT</span>
-        </button>
       </div>
 
       {/* Folder Contents & File Tree Container */}
@@ -521,7 +608,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             <div className="flex items-baseline gap-2 min-w-0">
               <Database size={14} className="text-cyan-400" />
-              <span className="text-[13px] font-semibold text-slate-100 tracking-tight whitespace-nowrap">Cloud Explorer</span>
+              <span className="text-[13px] font-semibold text-slate-100 tracking-tight whitespace-nowrap">Explorer</span>
               <div className="header-counter-row flex items-center gap-1">
                 <span className="counter-pill">{folderCount} {folderCount === 1 ? 'folder' : 'folders'}</span>
                 <span className="counter-bullet">·</span>
@@ -563,31 +650,124 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="back-nav-btn"
               onClick={navigateBack}
               disabled={folderPathHistory.length <= 1}
-              title="Go back to parent folder"
+              title={
+                folderPathHistory.length > 1
+                  ? `Up to: ${folderPathHistory[folderPathHistory.length - 2].name}`
+                  : 'At project root directory'
+              }
             >
               <ArrowLeft size={13} />
-              <span>Back</span>
             </button>
 
-            {/* Breadcrumb Trail */}
-            <div className="breadcrumb-trail">
-              {folderPathHistory.map((crumb, idx) => {
-                const isLast = idx === folderPathHistory.length - 1;
-                return (
-                  <React.Fragment key={idx}>
-                    {idx > 0 && <span className="breadcrumb-separator">/</span>}
+            {/* Non-Scrollable Responsive Breadcrumb Route */}
+            <div
+              className="breadcrumb-trail"
+              title={folderPathHistory.map((c) => c.name).join(' / ')}
+            >
+              {folderPathHistory.length === 1 ? (
+                /* Single Level: Root */
+                <button
+                  type="button"
+                  onClick={() => navigateToBreadcrumb(0)}
+                  className="breadcrumb-item active"
+                  title={folderPathHistory[0].name}
+                >
+                  <Home size={12} className="text-cyan-400 shrink-0" />
+                  <span className="truncate">{folderPathHistory[0].name}</span>
+                </button>
+              ) : folderPathHistory.length === 2 ? (
+                /* 2 Levels: Root > Current */
+                <>
+                  <button
+                    type="button"
+                    onClick={() => navigateToBreadcrumb(0)}
+                    className="breadcrumb-item shrink-0"
+                    title={folderPathHistory[0].name}
+                  >
+                    <Home size={11} className="shrink-0" />
+                    <span className="truncate max-w-[85px]">{folderPathHistory[0].name}</span>
+                  </button>
+
+                  <ChevronRight size={11} className="breadcrumb-separator" />
+
+                  <button
+                    type="button"
+                    className="breadcrumb-item active flex-1 min-w-0"
+                    title={folderPathHistory[1].name}
+                  >
+                    <FolderOpen size={12} className="text-cyan-400 shrink-0" />
+                    <span className="truncate text-cyan-300 font-semibold">{folderPathHistory[1].name}</span>
+                  </button>
+                </>
+              ) : (
+                /* 3+ Levels: Root > ... (Dropdown) > Current */
+                <>
+                  <button
+                    type="button"
+                    onClick={() => navigateToBreadcrumb(0)}
+                    className="breadcrumb-item shrink-0"
+                    title={`Root: ${folderPathHistory[0].name}`}
+                  >
+                    <Home size={11} className="shrink-0" />
+                  </button>
+
+                  <ChevronRight size={11} className="breadcrumb-separator" />
+
+                  {/* Intermediate Ancestors Popover Trigger */}
+                  <div className="relative inline-flex items-center" ref={breadcrumbDropdownRef} style={{ zIndex: 60 }}>
                     <button
                       type="button"
-                      onClick={() => navigateToBreadcrumb(idx)}
-                      className={`breadcrumb-item ${isLast ? 'active' : ''}`}
-                      title={crumb.name}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsBreadcrumbDropdownOpen(!isBreadcrumbDropdownOpen);
+                      }}
+                      className={`breadcrumb-ellipsis-btn ${isBreadcrumbDropdownOpen ? 'active' : ''}`}
+                      title="View ancestor folder hierarchy"
                     >
-                      {idx === 0 ? <Home size={11} className="shrink-0" /> : null}
-                      <span className="truncate max-w-[110px]">{crumb.name}</span>
+                      <MoreHorizontal size={13} />
                     </button>
-                  </React.Fragment>
-                );
-              })}
+
+                    {isBreadcrumbDropdownOpen && (
+                      <div className="breadcrumb-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                        <div className="breadcrumb-dropdown-header">Jump to parent folder</div>
+                        {folderPathHistory.slice(1, folderPathHistory.length - 1).map((crumb, sliceIdx) => {
+                          const origIdx = sliceIdx + 1;
+                          return (
+                            <button
+                              key={origIdx}
+                              type="button"
+                              className="breadcrumb-dropdown-item"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigateToBreadcrumb(origIdx);
+                                setIsBreadcrumbDropdownOpen(false);
+                              }}
+                              title={crumb.name}
+                            >
+                              <Folder size={12} className="text-indigo-400 shrink-0" />
+                              <span className="truncate">{crumb.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <ChevronRight size={11} className="breadcrumb-separator" />
+
+                  {/* Current Active Folder */}
+                  <button
+                    type="button"
+                    className="breadcrumb-item active flex-1 min-w-0"
+                    title={folderPathHistory[folderPathHistory.length - 1].name}
+                  >
+                    <FolderOpen size={12} className="text-cyan-400 shrink-0" />
+                    <span className="truncate text-cyan-300 font-semibold">
+                      {folderPathHistory[folderPathHistory.length - 1].name}
+                    </span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -647,11 +827,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     selectedItem={selectedItem}
                     expandedNodes={expandedNodes}
                     subNodes={subNodes}
-                    itemVersions={itemVersions}
                     loadingNodes={loadingNodes}
                     filterItem={filterItem}
-                    onToggleNode={handleToggleNode}
-                    onSelectVersion={handleSelectVersion}
+                    onToggleFolder={handleToggleFolder}
+                    onSelectModel={handleSelectModel}
                     formatFileSize={formatFileSize}
                   />
                 ) : null;
@@ -677,16 +856,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   selectedItem={selectedItem}
                   expandedNodes={expandedNodes}
                   subNodes={subNodes}
-                  itemVersions={itemVersions}
                   loadingNodes={loadingNodes}
                   filterItem={filterItem}
-                  onToggleNode={handleToggleNode}
-                  onSelectVersion={handleSelectVersion}
+                  onToggleFolder={handleToggleFolder}
+                  onSelectModel={handleSelectModel}
                   formatFileSize={formatFileSize}
                 />
               ))}
             </ul>
           )
+        )}
+      </div>
+          </div>
         )}
       </div>
     </aside>

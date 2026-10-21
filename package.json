@@ -4,15 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "nodemon --watch server server/index.js",
     "server": "node server/index.js",
-    "server:dev": "nodemon server/index.js",
-    "dev:all": "concurrently \"npm run server:dev\" \"npm run dev\"",
+    "server:dev": "nodemon --watch server server/index.js",
+    "dev:all": "nodemon --watch server server/index.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "start": "npm run build && concurrently \"npm run server:dev\" \"npm run dev\"",
-    "serve": "npm run build && node server/index.js"
+    "start": "node server/index.js",
+    "serve": "NODE_ENV=production node server/index.js"
   },
   "dependencies": {
     "@aps_sdk/authentication": "^1.0.1",
@@ -24,7 +24,8 @@
     "express": "^5.2.1",
     "lucide-react": "^1.31.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/cookie-session": "^2.0.49",

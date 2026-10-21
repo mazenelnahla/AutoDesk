@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
+import { PanelLeft, PanelRight } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { AutodeskViewer } from './components/AutodeskViewer';
 import { InspectorPanel } from './components/InspectorPanel';
+import { ExcelDataModal } from './components/ExcelDataModal';
 import { LoginPage } from './components/LoginPage';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
 import type {
@@ -11,6 +13,9 @@ import type {
   APSItem,
   APSUser,
   ViewerSelectedObject,
+  ElementScheduleData,
+  ScannedModelIdentMap,
+  ProjectSection,
 } from './types/aps';
 import {
   fetchUserProfile,
@@ -22,6 +27,10 @@ import {
   fetchLiveProjects,
   fetchLiveContents,
 } from './services/apsData';
+import {
+  saveScheduleData,
+  fetchScheduleForProject,
+} from './utils/excelSchedule';
 
 export function App() {
   const [user, setUser] = useState<APSUser | null>(null);
@@ -39,6 +48,83 @@ export function App() {
 
   // 3D Viewer Object Selection State
   const [selectedObject, setSelectedObject] = useState<ViewerSelectedObject | null>(null);
+
+  // Model-scanned Saipem_IDENT mapping from AutodeskViewer
+  const [modelIdentsMap, setModelIdentsMap] = useState<ScannedModelIdentMap>({});
+  const [modelSections, setModelSections] = useState<ProjectSection[]>([]);
+
+  // Excel Schedule State (keyed by Saipem_IDENT, scoped per project)
+  const [scheduleDataMap, setScheduleDataMap] = useState<Record<string, ElementScheduleData>>({});
+  const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
+  const [focusedSaipemIdent, setFocusedSaipemIdent] = useState<string | null>(null);
+  const [focusedDbId, setFocusedDbId] = useState<number | null>(null);
+  const [isolatedDbIds, setIsolatedDbIds] = useState<number[] | null>(null);
+  const [isolatedIdent, setIsolatedIdent] = useState<string | null>(null);
+  const [isIsolated, setIsIsolated] = useState<boolean>(false);
+  const [isolateTrigger, setIsolateTrigger] = useState<number>(0);
+
+  // Sidebar Collapse / Expand State
+  const [isLeftCollapsed, setIsLeftCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('aps_left_collapsed') === 'true';
+  });
+  const [isRightCollapsed, setIsRightCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('aps_right_collapsed') === 'true';
+  });
+
+  const toggleLeftSidebar = useCallback(() => {
+    setIsLeftCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('aps_left_collapsed', String(next));
+      setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+        if ((window as any).apsViewer?.resize) {
+          (window as any).apsViewer.resize();
+        }
+      }, 260);
+      return next;
+    });
+  }, []);
+
+  const toggleRightSidebar = useCallback(() => {
+    setIsRightCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('aps_right_collapsed', String(next));
+      setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+        if ((window as any).apsViewer?.resize) {
+          (window as any).apsViewer.resize();
+        }
+      }, 260);
+      return next;
+    });
+  }, []);
+
+  const handleIsolatePart = useCallback((dbId?: number, ident?: string, dbIds?: number[]) => {
+    let resolvedDbIds: number[] = [];
+    if (dbIds && dbIds.length > 0) {
+      resolvedDbIds = dbIds;
+    } else if (dbId) {
+      resolvedDbIds = [dbId];
+    } else if (ident && modelIdentsMap[ident]?.dbIds) {
+      resolvedDbIds = modelIdentsMap[ident].dbIds;
+    }
+
+    setFocusedDbId(dbId ?? null);
+    setFocusedSaipemIdent(ident ?? null);
+    setIsolatedDbIds(resolvedDbIds.length > 0 ? resolvedDbIds : (dbId ? [dbId] : null));
+    setIsolatedIdent(ident ?? null);
+    setIsIsolated(true);
+    setIsolateTrigger((prev) => prev + 1);
+  }, [modelIdentsMap]);
+
+  const handleClearIsolation = useCallback(() => {
+    setFocusedDbId(null);
+    setFocusedSaipemIdent(null);
+    setIsolatedDbIds(null);
+    setIsolatedIdent(null);
+    setIsIsolated(false);
+    setIsolateTrigger((prev) => prev + 1);
+  }, []);
 
   // 1. Check current session & fetch profile on load
   const checkSession = useCallback(async () => {
@@ -61,7 +147,96 @@ export function App() {
     checkSession();
   }, [checkSession]);
 
-  // 2. Load Hubs when user is logged in
+  // Load and fetch schedule data scoped to the currently selected project and matching its Saipem_IDENTs
+  useEffect(() => {
+    if (!selectedProject) {
+      setScheduleDataMap({});
+      return;
+    }
+
+    const modelKey = selectedItem?.base64Urn || selectedItem?.id;
+    const { scheduleMap } = fetchScheduleForProject({
+      projectId: selectedProject.id,
+      projectName: selectedProject.name,
+      modelKey,
+      modelIdents: modelIdentsMap,
+    });
+    setScheduleDataMap(scheduleMap);
+  }, [selectedProject?.id, selectedProject?.name, selectedItem?.base64Urn, selectedItem?.id, modelIdentsMap]);
+
+  // Callback when 3D model properties are scanned in AutodeskViewer
+  const handleModelIdentsScanned = useCallback((scanned: ScannedModelIdentMap) => {
+    setModelIdentsMap(scanned);
+    if (selectedProject) {
+      const modelKey = selectedItem?.base64Urn || selectedItem?.id;
+      const { scheduleMap } = fetchScheduleForProject({
+        projectId: selectedProject.id,
+        projectName: selectedProject.name,
+        modelKey,
+        modelIdents: scanned,
+      });
+      setScheduleDataMap(scheduleMap);
+    }
+  }, [selectedProject, selectedItem]);
+
+
+
+  // Handler to update or insert single element schedule entry
+  const handleUpdateScheduleData = useCallback((entry: ElementScheduleData) => {
+    if (!entry.saipemIdent) return;
+    const taggedEntry: ElementScheduleData = {
+      ...entry,
+      projectId: entry.projectId || selectedProject?.id,
+      projectName: entry.projectName || selectedProject?.name,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setScheduleDataMap((prev) => {
+      const updated = {
+        ...prev,
+        [taggedEntry.saipemIdent]: taggedEntry,
+      };
+      const modelKey = selectedItem?.base64Urn || selectedItem?.id;
+      saveScheduleData(modelKey, updated, selectedProject?.id);
+      return updated;
+    });
+  }, [selectedItem, selectedProject]);
+
+  // Handler to bulk import multiple records from Excel
+  const handleImportExcelSchedule = useCallback((newItems: ElementScheduleData[]) => {
+    setScheduleDataMap((prev) => {
+      const updated = { ...prev };
+      newItems.forEach((item) => {
+        if (item.saipemIdent) {
+          updated[item.saipemIdent] = {
+            ...updated[item.saipemIdent],
+            ...item,
+            projectId: item.projectId || selectedProject?.id,
+            projectName: item.projectName || selectedProject?.name,
+          };
+        }
+      });
+      const modelKey = selectedItem?.base64Urn || selectedItem?.id;
+      saveScheduleData(modelKey, updated, selectedProject?.id);
+      return updated;
+    });
+  }, [selectedItem, selectedProject]);
+
+  // Handler to explicitly assign an Excel record to the currently selected 3D piece
+  const handleAssignToSelectedObject = useCallback((item: ElementScheduleData) => {
+    if (!selectedObject) return;
+
+    const assignedEntry: ElementScheduleData = {
+      ...item,
+      dbId: selectedObject.dbId,
+      elementName: selectedObject.name || item.elementName,
+      updatedAt: new Date().toISOString(),
+    };
+
+    handleUpdateScheduleData(assignedEntry);
+  }, [selectedObject, handleUpdateScheduleData]);
+
+  // 2. Load Hubs when user is logged in (Auto-select first hub)
   useEffect(() => {
     if (!user) {
       setHubs([]);
@@ -80,7 +255,7 @@ export function App() {
       .then((liveHubs) => {
         if (liveHubs && liveHubs.length > 0) {
           setHubs(liveHubs);
-          setSelectedHub(liveHubs[0]);
+          setSelectedHub((prev) => (prev ? prev : liveHubs[0]));
         } else {
           setHubs([]);
           setSelectedHub(null);
@@ -106,7 +281,7 @@ export function App() {
       });
   }, [user]);
 
-  // 3. Load Projects when Selected Hub changes
+  // 3. Load Projects when Selected Hub changes (Auto-select first project)
   useEffect(() => {
     if (!user || !selectedHub) {
       setProjects([]);
@@ -114,25 +289,40 @@ export function App() {
       return;
     }
 
+    let isCancelled = false;
     setIsLoadingTree(true);
+
+    // Immediately clear projects and project selection if current project does not belong to selectedHub
+    setSelectedProject((prev) => (prev && prev.hubId === selectedHub.id ? prev : null));
 
     fetchLiveProjects(selectedHub.id)
       .then((liveProjects) => {
+        if (isCancelled) return;
         setProjects(liveProjects);
         if (liveProjects.length > 0) {
-          setSelectedProject(liveProjects[0]);
+          setSelectedProject((prev) => {
+            const exists = prev && prev.hubId === selectedHub.id && liveProjects.find((p) => p.id === prev.id);
+            return exists ? prev : liveProjects[0];
+          });
         } else {
           setSelectedProject(null);
         }
       })
       .catch((err) => {
+        if (isCancelled) return;
         console.error('Error fetching live projects:', err);
         setProjects([]);
         setSelectedProject(null);
       })
       .finally(() => {
-        setIsLoadingTree(false);
+        if (!isCancelled) {
+          setIsLoadingTree(false);
+        }
       });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [selectedHub, user]);
 
   // 4. Load Top Folders when Selected Project changes
@@ -144,12 +334,19 @@ export function App() {
       return;
     }
 
+    // Safety guard: ensure the project belongs to the selected hub
+    if (selectedProject.hubId && selectedProject.hubId !== selectedHub.id) {
+      return;
+    }
+
+    let isCancelled = false;
     setIsLoadingTree(true);
 
     const basePath = `/${selectedHub.name}/${selectedProject.name}`;
 
     fetchLiveContents(selectedHub.id, selectedProject.id)
       .then((liveItems) => {
+        if (isCancelled) return;
         const itemsWithPaths = (liveItems || []).map((item) => ({
           ...item,
           path: `${basePath}/${item.displayName}`,
@@ -157,12 +354,19 @@ export function App() {
         setItems(itemsWithPaths);
       })
       .catch((err) => {
+        if (isCancelled) return;
         console.error('Error fetching project top contents:', err);
         setItems([]);
       })
       .finally(() => {
-        setIsLoadingTree(false);
+        if (!isCancelled) {
+          setIsLoadingTree(false);
+        }
       });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [selectedProject, selectedHub, user]);
 
   const handleLogin = () => {
@@ -200,22 +404,63 @@ export function App() {
         onLogin={handleLogin}
         onLogout={handleLogout}
         isLoadingAuth={isLoadingAuth}
+        onOpenExcelModal={() => setIsExcelModalOpen(true)}
+        totalScheduleCount={Object.keys(scheduleDataMap).length}
+        isLeftCollapsed={isLeftCollapsed}
+        onToggleLeftSidebar={toggleLeftSidebar}
+        isRightCollapsed={isRightCollapsed}
+        onToggleRightSidebar={toggleRightSidebar}
       />
 
       {/* Main Content Area */}
       <div className="app-main-layout">
-        {/* Left Sidebar Tree */}
+        {/* Floating expand buttons when sidebars are collapsed */}
+        {isLeftCollapsed && (
+          <button
+            className="floating-sidebar-toggle left"
+            onClick={toggleLeftSidebar}
+            title="Expand Navigation & Assistant Sidebar"
+            aria-label="Expand Navigation & Assistant Sidebar"
+          >
+            <PanelLeft size={14} />
+            <span>Show Sidebar</span>
+          </button>
+        )}
+
+        {isRightCollapsed && (
+          <button
+            className="floating-sidebar-toggle right"
+            onClick={toggleRightSidebar}
+            title="Expand Inspector Panel"
+            aria-label="Expand Inspector Panel"
+          >
+            <span>Show Inspector</span>
+            <PanelRight size={14} />
+          </button>
+        )}
+
+        {/* Left Sidebar Tree & AI Assistant */}
         <Sidebar
+          isCollapsed={isLeftCollapsed}
+          onToggleCollapse={toggleLeftSidebar}
           hubs={hubs}
           selectedHub={selectedHub}
           onSelectHub={(hub) => {
+            if (hub.id === selectedHub?.id) return;
             setSelectedHub(hub);
+            setSelectedProject(null);
+            setProjects([]);
+            setItems([]);
+            setSelectedItem(null);
             setSelectedObject(null);
           }}
           projects={projects}
           selectedProject={selectedProject}
           onSelectProject={(proj) => {
+            if (proj.id === selectedProject?.id) return;
             setSelectedProject(proj);
+            setItems([]);
+            setSelectedItem(null);
             setSelectedObject(null);
           }}
           items={items}
@@ -223,8 +468,17 @@ export function App() {
           onSelectItem={(item) => {
             setSelectedItem(item);
             setSelectedObject(null);
+            handleClearIsolation();
           }}
           isLoading={isLoadingTree}
+          selectedObject={selectedObject}
+          scheduleDataMap={scheduleDataMap}
+          modelIdentsMap={modelIdentsMap}
+          modelSections={modelSections}
+          isIsolated={isIsolated}
+          isolatedDbIds={isolatedDbIds}
+          onIsolatePart={handleIsolatePart}
+          onClearIsolation={handleClearIsolation}
         />
 
         {/* Center 3D Model / Revit Viewer */}
@@ -233,17 +487,57 @@ export function App() {
           isAuthenticated={!!user}
           onLoginRequest={handleLogin}
           onObjectSelected={(obj) => setSelectedObject(obj)}
+          scheduleDataMap={scheduleDataMap}
+          onOpenExcelModal={() => setIsExcelModalOpen(true)}
+          focusedSaipemIdent={focusedSaipemIdent}
+          focusedDbId={focusedDbId}
+          isolatedDbIds={isolatedDbIds}
+          isIsolated={isIsolated}
+          isolateTrigger={isolateTrigger}
+          onClearIsolation={handleClearIsolation}
+          onModelIdentsScanned={handleModelIdentsScanned}
+          onModelSectionsScanned={(sections) => setModelSections(sections)}
         />
 
         {/* Right Metadata & Properties Inspector */}
         <InspectorPanel
+          isCollapsed={isRightCollapsed}
+          onToggleCollapse={toggleRightSidebar}
           selectedItem={selectedItem}
+          selectedProject={selectedProject}
           selectedObject={selectedObject}
+          scheduleDataMap={scheduleDataMap}
+          modelIdentsMap={modelIdentsMap}
+          onUpdateScheduleData={handleUpdateScheduleData}
+          onOpenExcelModal={() => setIsExcelModalOpen(true)}
+          onSelectSaipemIdent={(ident) => {
+            setFocusedSaipemIdent(ident);
+          }}
+          onIsolatePart={handleIsolatePart}
+          onClearIsolation={handleClearIsolation}
+          isIsolated={isIsolated}
+          isolatedIdent={isolatedIdent}
         />
       </div>
+
+      {/* Excel Data & Saipem_IDENT Hub Modal */}
+      <ExcelDataModal
+        isOpen={isExcelModalOpen}
+        onClose={() => setIsExcelModalOpen(false)}
+        scheduleList={Object.values(scheduleDataMap)}
+        onImportSchedule={handleImportExcelSchedule}
+        onAssignToSelectedObject={handleAssignToSelectedObject}
+        onSelectSaipemIdent={(ident) => {
+          setFocusedSaipemIdent(ident);
+        }}
+        onIsolatePart={handleIsolatePart}
+        currentModelName={selectedItem?.displayName}
+        selectedObject={selectedObject}
+        selectedProject={selectedProject}
+        scannedModelIdents={modelIdentsMap}
+      />
     </div>
   );
 }
 
 export default App;
-
