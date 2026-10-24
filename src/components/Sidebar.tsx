@@ -440,7 +440,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             className={`side-rail-btn ${activeSidebarTab === 'explorer' ? 'active' : ''}`}
-            onClick={() => setActiveSidebarTab('explorer')}
+            onClick={() => { setActiveSidebarTab('explorer'); if (isCollapsed) onToggleCollapse?.(); }}
+            aria-label="Open file explorer"
             title="BIM Model Explorer & Files"
           >
             <FolderTree size={18} />
@@ -450,7 +451,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             className={`side-rail-btn ${activeSidebarTab === 'ai_chat' ? 'active' : ''}`}
-            onClick={() => setActiveSidebarTab('ai_chat')}
+            onClick={() => { setActiveSidebarTab('ai_chat'); if (isCollapsed) onToggleCollapse?.(); }}
+            aria-label="Open AI chat"
             title="Full AI Chatbot (LM Studio)"
           >
             <div className="side-rail-icon-wrap">
@@ -467,9 +469,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               type="button"
               className="side-rail-btn side-rail-collapse-btn"
               onClick={onToggleCollapse}
-              title="Collapse Left Sidebar"
+              title={isCollapsed ? 'Expand Left Sidebar' : 'Collapse Left Sidebar'}
+              aria-label={isCollapsed ? 'Expand Left Sidebar' : 'Collapse Left Sidebar'}
+              aria-expanded={!isCollapsed}
             >
-              <ChevronLeft size={16} />
+              {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             </button>
           )}
 
@@ -485,7 +489,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Main Content Pane */}
-      <div className="sidebar-main-content">
+      <div className="sidebar-main-content" hidden={isCollapsed}>
         {activeSidebarTab === 'ai_chat' ? (
           <div className="full-chatbot-pane">
             <ChatbotSection

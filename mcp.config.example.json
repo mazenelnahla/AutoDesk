@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "autodesk-bim": {
+      "command": "node",
+      "args": [
+        "/Users/mazenelnahla/Desktop/Projects/React Projects/AutoDesk/server/mcp/index.js"
+      ]
+    }
+  }
+}

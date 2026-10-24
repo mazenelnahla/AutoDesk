@@ -1,3 +1,5 @@
+import { STATUS_COLORS, effectiveStatus } from '../utils/statusColors';
+import { generateModelSchedule } from '../utils/generateModelSchedule';
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   FileSpreadsheet,
@@ -38,6 +40,7 @@ interface ExcelDataModalProps {
   onSelectSaipemIdent?: (ident: string) => void;
   onIsolatePart?: (dbId?: number, saipemIdent?: string, dbIds?: number[]) => void;
   currentModelName?: string;
+  modelUrn?: string;
   selectedObject?: ViewerSelectedObject | null;
   selectedProject?: APSProject | null;
   scannedModelIdents?: ScannedModelIdentMap;
@@ -52,12 +55,14 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
   onSelectSaipemIdent,
   onIsolatePart,
   currentModelName,
+  modelUrn,
   selectedObject,
   selectedProject,
   scannedModelIdents = {},
 }) => {
   const [viewScope, setViewScope] = useState<'project' | 'all'>('project');
   const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<'all' | ScheduleStatus>('all');
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -145,22 +150,26 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
         (item.category && item.category.toLowerCase().includes(searchTerm.toLowerCase())) ||
         (item.assignee && item.assignee.toLowerCase().includes(searchTerm.toLowerCase()));
 
-      const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
+      const matchesStatus = statusFilter === 'all' || effectiveStatus(item) === statusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [activeDisplayList, searchTerm, statusFilter]);
 
+  useEffect(() => { setPage(0); }, [searchTerm, statusFilter, viewScope, isOpen]);
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / 100));
+  const currentPage = Math.min(page, pageCount - 1);
+
   // Statistics calculation based on active displayed list
   const totalCount = activeDisplayList.length;
-  const completedCount = activeDisplayList.filter((i) => i.status === 'completed' || i.completionPercentage >= 100).length;
-  const inProgressCount = activeDisplayList.filter((i) => i.status === 'in_progress').length;
-  const delayedCount = activeDisplayList.filter((i) => i.status === 'delayed').length;
+  const completedCount = activeDisplayList.filter((i) => effectiveStatus(i) === 'completed').length;
+  const inProgressCount = activeDisplayList.filter((i) => effectiveStatus(i) === 'in_progress').length;
+  const delayedCount = activeDisplayList.filter((i) => effectiveStatus(i) === 'delayed').length;
   const avgCompletion = totalCount > 0
     ? Math.round(activeDisplayList.reduce((acc, curr) => acc + (curr.completionPercentage || 0), 0) / totalCount)
     : 0;
 
   const getStatusBadge = (status: ScheduleStatus, pct: number) => {
-    switch (status) {
+    switch (effectiveStatus({ status, completionPercentage: pct })) {
       case 'completed':
         return (
           <span className="schedule-status-badge badge-completed">
@@ -237,6 +246,25 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
           </div>
 
           <div className="excel-header-actions">
+            <button type="button" className="excel-btn-template" disabled={!Object.keys(scannedModelIdents).length}
+              onClick={() => {
+                const inventory = Object.entries(scannedModelIdents).flatMap(([saipemIdent, info]) => info.dbIds.map(dbId => ({
+                  modelUrn, projectId: selectedProject?.id, saipemIdent, dbId, ...info.elements?.[dbId],
+                })));
+                const url = URL.createObjectURL(new Blob([JSON.stringify(inventory, null, 2)], { type: 'application/json' }));
+                const link = document.createElement('a'); link.href = url; link.download = 'model-element-inventory.json'; link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}>Export model parameters</button>
+            <button type="button" className="excel-btn-template"
+              disabled={!modelUrn || !selectedProject || !Object.keys(scannedModelIdents).length}
+              onClick={() => {
+                if (!modelUrn || !selectedProject) return;
+                const rows = generateModelSchedule(scannedModelIdents, scheduleList, modelUrn, selectedProject.id, selectedProject.name);
+                onImportSchedule(rows);
+                setSuccessMsg(`Generated ${rows.length} sample part records from the model inventory. Existing records preserved.`);
+              }} title="Generate missing part rows using scanned model parameters and existing schedule examples">
+              <Sparkles size={13} /> Generate remaining sample data
+            </button>
             {scannedModelIdents && Object.keys(scannedModelIdents).length > 0 && (
               <button
                 type="button"
@@ -245,7 +273,7 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
                 title="Auto-fetch Excel records for unique Saipem_IDENT parts detected in active 3D model"
               >
                 <Sparkles size={13} className="text-emerald-400" />
-                <span>Sync {Object.keys(scannedModelIdents).length} Model Parts</span>
+                <span>Sync {Object.values(scannedModelIdents).reduce((sum, info) => sum + info.dbIds.length, 0)} Model Parts</span>
               </button>
             )}
             <button
@@ -503,7 +531,7 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map((row, idx) => {
+                {filteredItems.slice(currentPage * 100, (currentPage + 1) * 100).map((row, idx) => {
                   const isCurrentBound = selectedObject && (row.dbId === selectedObject.dbId);
                   const isModelMatched = Boolean(scannedModelIdents && scannedModelIdents[row.saipemIdent]);
 
@@ -555,7 +583,7 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
                           <div className="table-progress-bar">
                             <div
                               className="table-progress-fill"
-                              style={{ width: `${row.completionPercentage}%` }}
+                              style={{ width: `${row.completionPercentage}%`, background: STATUS_COLORS[effectiveStatus(row)] }}
                             />
                           </div>
                           <span className="progress-pct">
@@ -601,8 +629,8 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
                             title="Focus & Isolate in 3D Viewer"
                             onClick={() => {
                               if (onSelectSaipemIdent) onSelectSaipemIdent(row.saipemIdent);
-                              const targetDbIds = scannedModelIdents ? scannedModelIdents[row.saipemIdent]?.dbIds : undefined;
-                              if (onIsolatePart) onIsolatePart(row.dbId, row.saipemIdent, targetDbIds);
+                              const targetDbIds = row.dbId == null && scannedModelIdents ? scannedModelIdents[row.saipemIdent]?.dbIds : undefined;
+                              if (onIsolatePart) onIsolatePart(row.dbId, row.dbId == null ? row.saipemIdent : undefined, targetDbIds);
                               onClose();
                             }}
                           >
@@ -622,7 +650,10 @@ export const ExcelDataModal: React.FC<ExcelDataModalProps> = ({
         {/* Modal Footer */}
         <div className="excel-modal-footer">
           <span className="excel-footer-count">
-            Showing <strong>{filteredItems.length}</strong> of {totalCount} rows
+            Showing <strong>{filteredItems.length ? currentPage * 100 + 1 : 0}–{Math.min((currentPage + 1) * 100, filteredItems.length)}</strong> of {filteredItems.length} matching rows ({totalCount} total)
+            <button className="excel-btn-template" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button>
+            <span>Page {currentPage + 1} of {pageCount}</span>
+            <button className="excel-btn-template" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Next</button>
           </span>
           <button type="button" className="excel-btn-done" onClick={onClose}>
             Done

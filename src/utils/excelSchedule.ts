@@ -1,3 +1,4 @@
+import { scheduleRecordKey, indexScheduleRecords } from './scheduleRecords.ts';
 import * as XLSX from 'xlsx';
 import type { ElementScheduleData, ScheduleStatus, ViewerProperty } from '../types/aps';
 
@@ -581,9 +582,9 @@ export function saveMasterExcelPool(newItems: ElementScheduleData[]): ElementSch
     const existing = loadMasterExcelPool();
     const map = new Map<string, ElementScheduleData>();
 
-    // Key items by saipemIdent + optional project
+    // Keep element rows distinct within each project and shared IDENT.
     const buildKey = (item: ElementScheduleData) =>
-      `${(item.saipemIdent || '').trim().toLowerCase()}::${(item.projectId || item.projectName || '').trim().toLowerCase()}`;
+      JSON.stringify([scheduleRecordKey(item), (item.projectId || item.projectName || '').trim().toLowerCase()]);
 
     existing.forEach((item) => {
       if (item.saipemIdent) {
@@ -619,7 +620,7 @@ export function loadProjectScheduleData(projectId: string): Record<string, Eleme
   if (!projectId) return {};
   try {
     const raw = localStorage.getItem(`${PROJECT_STORAGE_PREFIX}${projectId}`);
-    return raw ? JSON.parse(raw) : {};
+    return raw ? indexScheduleRecords(Object.values(JSON.parse(raw))) : {};
   } catch (e) {
     console.warn(`Failed to load schedule for project ${projectId}:`, e);
     return {};
@@ -666,7 +667,14 @@ export function fetchScheduleForProject(params: {
       const modelRaw = localStorage.getItem(`${STORAGE_PREFIX}${modelKey}`);
       if (modelRaw) {
         const modelData = JSON.parse(modelRaw);
-        Object.assign(projectMap, modelData);
+        const legacyItems = (Object.values(modelData) as ElementScheduleData[]).filter((item) =>
+          (!item.projectId || item.projectId === projectId) && (!item.modelUrn || item.modelUrn === modelKey)
+        );
+        for (const item of legacyItems) {
+          if (!item.modelUrn) delete projectMap[scheduleRecordKey(item)];
+          const scoped = { ...item, modelUrn: modelKey };
+          projectMap[scheduleRecordKey(scoped)] = scoped;
+        }
       }
     } catch {}
   }
@@ -686,6 +694,7 @@ export function fetchScheduleForProject(params: {
 
     // Strictly exclude items that explicitly belong to a different project
     if (item.projectId && item.projectId !== projectId) return;
+    if (!item.projectId && item.projectName && lowerProjectName && item.projectName.toLowerCase().trim() !== lowerProjectName) return;
 
     const matchesProjectTag =
       (item.projectId && item.projectId === projectId) ||
@@ -696,7 +705,8 @@ export function fetchScheduleForProject(params: {
 
     // If item matches this project or matches a unique Saipem_IDENT detected in the model
     if (matchesProjectTag || matchesModelIdent) {
-      const existing = projectMap[item.saipemIdent];
+      const key = scheduleRecordKey(item);
+      const existing = projectMap[key];
       const modelInfo = originalModelKey ? modelIdents[originalModelKey] : undefined;
 
       const merged: ElementScheduleData = {
@@ -705,13 +715,13 @@ export function fetchScheduleForProject(params: {
         saipemIdent: item.saipemIdent,
         projectId: projectId,
         projectName: projectName || item.projectName,
-        dbId: existing?.dbId ?? modelInfo?.dbIds?.[0] ?? item.dbId,
-        elementName: existing?.elementName ?? modelInfo?.name ?? item.elementName,
-        category: existing?.category ?? modelInfo?.category ?? item.category,
+        dbId: item.dbId,
+        elementName: existing?.elementName ?? item.elementName ?? modelInfo?.name,
+        category: existing?.category ?? item.category ?? modelInfo?.category,
         updatedAt: existing?.updatedAt || item.updatedAt || new Date().toISOString(),
       };
 
-      projectMap[item.saipemIdent] = merged;
+      projectMap[key] = merged;
     }
   });
 
@@ -729,10 +739,13 @@ export function fetchScheduleForProject(params: {
   // Persist updated project data
   saveProjectScheduleData(projectId, strictlyProjectMap);
 
-  return {
-    scheduleMap: strictlyProjectMap,
-    matchedCount: Object.keys(strictlyProjectMap).length,
-  };
+  // Preserve the complete project store, but expose only records for this model.
+  const visibleMap = modelKey ? indexScheduleRecords(Object.values(strictlyProjectMap).filter((item) => {
+    if (item.modelUrn) return item.modelUrn === modelKey;
+    const info = modelIdents[lowerModelIdentMap[item.saipemIdent.toLowerCase().trim()]];
+    return !!info && (item.dbId == null || info.dbIds.includes(item.dbId));
+  }).sort((a, b) => Number(!!a.modelUrn) - Number(!!b.modelUrn)).map((item) => ({ ...item, modelUrn: modelKey }))) : strictlyProjectMap;
+  return { scheduleMap: visibleMap, matchedCount: Object.keys(visibleMap).length };
 }
 
 /**
@@ -761,10 +774,10 @@ export function loadSavedScheduleData(
     if (modelKey) {
       const modelRaw = localStorage.getItem(`${STORAGE_PREFIX}${modelKey}`);
       const modelData: Record<string, ElementScheduleData> = modelRaw ? JSON.parse(modelRaw) : {};
-      return { ...globalData, ...modelData };
+      return indexScheduleRecords(Object.values({ ...globalData, ...modelData }));
     }
 
-    return globalData;
+    return indexScheduleRecords(Object.values(globalData));
   } catch (e) {
     console.warn('Failed to load schedule data from storage:', e);
     return {};
@@ -781,7 +794,7 @@ export function saveScheduleData(
 ) {
   try {
     if (projectId) {
-      saveProjectScheduleData(projectId, data);
+      saveProjectScheduleData(projectId, { ...loadProjectScheduleData(projectId), ...indexScheduleRecords(Object.values(data)) });
     }
     // Also save to master Excel pool
     saveMasterExcelPool(Object.values(data));

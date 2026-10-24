@@ -1,5 +1,7 @@
+import { scheduleRecordKey, indexScheduleRecords } from './utils/scheduleRecords';
 import { useEffect, useState, useCallback } from 'react';
-import { PanelLeft, PanelRight } from 'lucide-react';
+import { useMcpBridge } from './services/useMcpBridge';
+import { PanelRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { AutodeskViewer } from './components/AutodeskViewer';
@@ -126,6 +128,28 @@ export function App() {
     setIsolateTrigger((prev) => prev + 1);
   }, []);
 
+  // Model dbIds and scanned classifications are never transferable across models.
+  useEffect(() => {
+    setSelectedObject(null);
+    setModelIdentsMap({});
+    setModelSections([]);
+    setScheduleDataMap({});
+    setIsExcelModalOpen(false);
+    handleClearIsolation();
+  }, [selectedProject?.id, selectedItem?.base64Urn, selectedItem?.id, handleClearIsolation]);
+
+  useMcpBridge(!!user, {
+    modelId: selectedItem?.base64Urn,
+    projectName: selectedProject?.name,
+    modelName: selectedItem?.displayName,
+    selectedObject,
+    sections: modelSections,
+    scheduleDataMap,
+    modelIdentsMap: Object.fromEntries(Object.entries(modelIdentsMap).map(([ident, { dbIds, name, category }]) => [ident, { dbIds, name, category }])),
+    isIsolated,
+    isolatedCount: isolatedDbIds?.length || 0,
+  }, handleIsolatePart, handleClearIsolation);
+
   // 1. Check current session & fetch profile on load
   const checkSession = useCallback(async () => {
     setIsLoadingAuth(true);
@@ -186,6 +210,7 @@ export function App() {
     if (!entry.saipemIdent) return;
     const taggedEntry: ElementScheduleData = {
       ...entry,
+      modelUrn: selectedItem?.base64Urn || selectedItem?.id,
       projectId: entry.projectId || selectedProject?.id,
       projectName: entry.projectName || selectedProject?.name,
       updatedAt: new Date().toISOString(),
@@ -193,8 +218,8 @@ export function App() {
 
     setScheduleDataMap((prev) => {
       const updated = {
-        ...prev,
-        [taggedEntry.saipemIdent]: taggedEntry,
+        ...indexScheduleRecords(Object.values(prev)),
+        [scheduleRecordKey(taggedEntry)]: taggedEntry,
       };
       const modelKey = selectedItem?.base64Urn || selectedItem?.id;
       saveScheduleData(modelKey, updated, selectedProject?.id);
@@ -205,15 +230,16 @@ export function App() {
   // Handler to bulk import multiple records from Excel
   const handleImportExcelSchedule = useCallback((newItems: ElementScheduleData[]) => {
     setScheduleDataMap((prev) => {
-      const updated = { ...prev };
+      const updated = indexScheduleRecords(Object.values(prev));
       newItems.forEach((item) => {
         if (item.saipemIdent) {
-          updated[item.saipemIdent] = {
-            ...updated[item.saipemIdent],
+          const taggedItem = {
             ...item,
+            modelUrn: selectedItem?.base64Urn || selectedItem?.id,
             projectId: item.projectId || selectedProject?.id,
             projectName: item.projectName || selectedProject?.name,
           };
+          updated[scheduleRecordKey(taggedItem)] = { ...updated[scheduleRecordKey(taggedItem)], ...taggedItem };
         }
       });
       const modelKey = selectedItem?.base64Urn || selectedItem?.id;
@@ -406,39 +432,10 @@ export function App() {
         isLoadingAuth={isLoadingAuth}
         onOpenExcelModal={() => setIsExcelModalOpen(true)}
         totalScheduleCount={Object.keys(scheduleDataMap).length}
-        isLeftCollapsed={isLeftCollapsed}
-        onToggleLeftSidebar={toggleLeftSidebar}
-        isRightCollapsed={isRightCollapsed}
-        onToggleRightSidebar={toggleRightSidebar}
       />
 
       {/* Main Content Area */}
       <div className="app-main-layout">
-        {/* Floating expand buttons when sidebars are collapsed */}
-        {isLeftCollapsed && (
-          <button
-            className="floating-sidebar-toggle left"
-            onClick={toggleLeftSidebar}
-            title="Expand Navigation & Assistant Sidebar"
-            aria-label="Expand Navigation & Assistant Sidebar"
-          >
-            <PanelLeft size={14} />
-            <span>Show Sidebar</span>
-          </button>
-        )}
-
-        {isRightCollapsed && (
-          <button
-            className="floating-sidebar-toggle right"
-            onClick={toggleRightSidebar}
-            title="Expand Inspector Panel"
-            aria-label="Expand Inspector Panel"
-          >
-            <span>Show Inspector</span>
-            <PanelRight size={14} />
-          </button>
-        )}
-
         {/* Left Sidebar Tree & AI Assistant */}
         <Sidebar
           isCollapsed={isLeftCollapsed}
@@ -447,6 +444,7 @@ export function App() {
           selectedHub={selectedHub}
           onSelectHub={(hub) => {
             if (hub.id === selectedHub?.id) return;
+            handleClearIsolation();
             setSelectedHub(hub);
             setSelectedProject(null);
             setProjects([]);
@@ -458,6 +456,7 @@ export function App() {
           selectedProject={selectedProject}
           onSelectProject={(proj) => {
             if (proj.id === selectedProject?.id) return;
+            handleClearIsolation();
             setSelectedProject(proj);
             setItems([]);
             setSelectedItem(null);
@@ -483,10 +482,12 @@ export function App() {
 
         {/* Center 3D Model / Revit Viewer */}
         <AutodeskViewer
+          key={`${selectedProject?.id || ""}:${selectedItem?.base64Urn || selectedItem?.id || ""}`}
           selectedItem={selectedItem}
           isAuthenticated={!!user}
           onLoginRequest={handleLogin}
           onObjectSelected={(obj) => setSelectedObject(obj)}
+          onIsolatePart={handleIsolatePart}
           scheduleDataMap={scheduleDataMap}
           onOpenExcelModal={() => setIsExcelModalOpen(true)}
           focusedSaipemIdent={focusedSaipemIdent}
@@ -499,7 +500,9 @@ export function App() {
           onModelSectionsScanned={(sections) => setModelSections(sections)}
         />
 
-        {/* Right Metadata & Properties Inspector */}
+        {/* Persistent inspector rail, mirroring the left navigation. */}
+        <div className={`inspector-shell${isRightCollapsed ? ' is-collapsed' : ''}`}>
+        <div id="inspector-content" className="inspector-shell-content" hidden={isRightCollapsed}>
         <InspectorPanel
           isCollapsed={isRightCollapsed}
           onToggleCollapse={toggleRightSidebar}
@@ -518,6 +521,32 @@ export function App() {
           isIsolated={isIsolated}
           isolatedIdent={isolatedIdent}
         />
+        </div>
+        <nav className="inspector-side-rail" aria-label="Inspector navigation">
+          <button
+            type="button"
+            className={`side-rail-btn${!isRightCollapsed ? ' active' : ''}`}
+            onClick={() => { if (isRightCollapsed) toggleRightSidebar(); }}
+            title="Open Inspector"
+            aria-label="Open Inspector"
+            aria-expanded={!isRightCollapsed}
+            aria-controls="inspector-content"
+          >
+            <PanelRight size={18} />
+          </button>
+          <button
+            type="button"
+            className="side-rail-btn"
+            onClick={toggleRightSidebar}
+            title={isRightCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}
+            aria-label={isRightCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}
+            aria-expanded={!isRightCollapsed}
+            aria-controls="inspector-content"
+          >
+            {isRightCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+          </button>
+        </nav>
+        </div>
       </div>
 
       {/* Excel Data & Saipem_IDENT Hub Modal */}
@@ -532,6 +561,7 @@ export function App() {
         }}
         onIsolatePart={handleIsolatePart}
         currentModelName={selectedItem?.displayName}
+        modelUrn={selectedItem?.base64Urn || selectedItem?.id}
         selectedObject={selectedObject}
         selectedProject={selectedProject}
         scannedModelIdents={modelIdentsMap}

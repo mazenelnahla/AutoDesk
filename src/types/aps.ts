@@ -105,7 +105,15 @@ export interface ElementScheduleData {
   updatedAt?: string;
 }
 
+export interface ScannedModelElement {
+  name?: string;
+  category?: string;
+  externalId?: string;
+  parameters: Record<string, string>;
+}
+
 export interface ScannedModelIdentInfo {
+  elements?: Record<number, ScannedModelElement>;
   dbIds: number[];
   name?: string;
   category?: string;

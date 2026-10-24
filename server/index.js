@@ -7,6 +7,8 @@ import authRoutes from './routes/auth.js';
 import hubsRoutes from './routes/hubs.js';
 import llmRoutes from './routes/llm.js';
 
+import { bridgeRouter } from './mcp/bridge.js';
+
 const app = express();
 const server = http.createServer(app);
 
@@ -26,6 +28,7 @@ app.use(session({
   signed: true,
 }));
 
+app.use('/api/mcp', express.json({ limit: '10mb' }), bridgeRouter);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

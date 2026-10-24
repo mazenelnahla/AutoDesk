@@ -1,3 +1,5 @@
+import { STATUS_COLORS, effectiveStatus } from '../utils/statusColors';
+import { findScheduleRecord } from '../utils/scheduleRecords';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   FileText,
@@ -74,6 +76,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [identListSearch, setIdentListSearch] = useState('');
   const [showAllRawProps, setShowAllRawProps] = useState(false);
   const [userSelectedIdent, setUserSelectedIdent] = useState<string | null>(null);
+  const [showProjectInventory, setShowProjectInventory] = useState(false);
 
   // Filter schedule data strictly to the selected project
   const projectScheduleMap = useMemo(() => {
@@ -125,21 +128,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   // Sync user selection when a new 3D piece is selected
   useEffect(() => {
+    setShowProjectInventory(false);
     if (detectedIdentFromObject) {
       setUserSelectedIdent(detectedIdentFromObject);
     } else if (selectedObject) {
       // Selected object has no IDENT detected
       setUserSelectedIdent(null);
     }
-  }, [detectedIdentFromObject, selectedObject]);
+  }, [detectedIdentFromObject, selectedObject, selectedProject?.id, selectedItem?.id]);
 
   // Currently active Saipem_IDENT (strictly related to this project)
-  const activeIdent = detectedIdentFromObject || userSelectedIdent;
+  const activeIdent = showProjectInventory ? null : (userSelectedIdent || detectedIdentFromObject);
 
   // All unique Saipem_IDENTs strictly related to this project
   const allProjectIdents = useMemo(() => {
     const identSet = new Set<string>();
-    Object.keys(projectScheduleMap).forEach((id) => identSet.add(id));
+    Object.values(projectScheduleMap).forEach((item) => identSet.add(item.saipemIdent));
     if (modelIdentsMap) {
       Object.keys(modelIdentsMap).forEach((id) => identSet.add(id));
     }
@@ -155,17 +159,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (selectedObject?.dbId && detectedIdentFromObject === activeIdent) {
       return [selectedObject.dbId];
     }
-    if (projectScheduleMap[activeIdent]?.dbId) {
-      return [projectScheduleMap[activeIdent].dbId!];
-    }
-    return [];
+    return Object.values(projectScheduleMap).filter((item) => item.saipemIdent === activeIdent && item.dbId != null).map((item) => item.dbId!);
   }, [activeIdent, modelIdentsMap, selectedObject, detectedIdentFromObject, projectScheduleMap]);
 
   // Schedule record for the active Saipem_IDENT (strictly tagged with project)
   const currentSchedule: ElementScheduleData = useMemo(() => {
-    if (activeIdent && projectScheduleMap[activeIdent]) {
-      return projectScheduleMap[activeIdent];
-    }
+    const matched = activeIdent ? findScheduleRecord(projectScheduleMap, activeIdent, selectedObject?.dbId) : undefined;
+    if (matched) return matched;
     const modelInfo = activeIdent && modelIdentsMap ? modelIdentsMap[activeIdent] : undefined;
     return {
       saipemIdent: activeIdent || '',
@@ -185,34 +185,34 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     return Object.values(projectScheduleMap);
   }, [projectScheduleMap]);
 
-  const hasScheduleData = Boolean(activeIdent && projectScheduleMap[activeIdent]);
+  const hasScheduleData = Boolean(activeIdent && findScheduleRecord(projectScheduleMap, activeIdent, selectedObject?.dbId));
 
   // Color and badge helper for verified status
   const getStatusTheme = (status: ScheduleStatus) => {
     switch (status) {
       case 'completed':
         return {
-          bar: 'bg-gradient-to-r from-emerald-500 to-teal-400',
-          text: 'text-emerald-400',
-          border: 'border-emerald-500/30',
-          bg: 'bg-emerald-500/10',
-          icon: <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />,
+          bar: 'status-fill-completed',
+          text: 'status-text-completed',
+          border: 'status-border-completed',
+          bg: 'status-bg-completed',
+          icon: <CheckCircle2 size={13} className="status-text-completed shrink-0" />,
         };
       case 'in_progress':
         return {
-          bar: 'bg-gradient-to-r from-cyan-500 to-blue-500',
-          text: 'text-cyan-400',
-          border: 'border-cyan-500/30',
-          bg: 'bg-cyan-500/10',
-          icon: <Clock size={13} className="text-cyan-400 shrink-0" />,
+          bar: 'status-fill-in_progress',
+          text: 'status-text-in_progress',
+          border: 'status-border-in_progress',
+          bg: 'status-bg-in_progress',
+          icon: <Clock size={13} className="status-text-in_progress shrink-0" />,
         };
       case 'delayed':
         return {
-          bar: 'bg-gradient-to-r from-amber-500 to-rose-500',
-          text: 'text-amber-400',
-          border: 'border-amber-500/30',
-          bg: 'bg-amber-500/10',
-          icon: <AlertTriangle size={13} className="text-amber-400 shrink-0" />,
+          bar: 'status-fill-delayed',
+          text: 'status-text-delayed',
+          border: 'status-border-delayed',
+          bg: 'status-bg-delayed',
+          icon: <AlertTriangle size={13} className="status-text-delayed shrink-0" />,
         };
       default:
         return {
@@ -284,7 +284,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (!identListSearch.trim()) return allProjectIdents;
     const q = identListSearch.toLowerCase();
     return allProjectIdents.filter((id) => {
-      const rec = projectScheduleMap[id];
+      const rec = findScheduleRecord(projectScheduleMap, id);
       return (
         id.toLowerCase().includes(q) ||
         (rec?.elementName && rec.elementName.toLowerCase().includes(q)) ||
@@ -398,7 +398,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         {/* When active Saipem_IDENT is determined: Highlight Same IDENT */}
         {activeIdent ? (
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="inspector-identity-row">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center shrink-0">
                   <Hash size={15} className="text-cyan-400" />
@@ -444,7 +444,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </div>
 
             {/* Model parts sharing this IDENT count indicator */}
-            <div className="flex items-center justify-between p-2 rounded-lg bg-slate-800/70 border border-slate-700/80 text-xs">
+            <div className="inspector-parts-summary">
               <div className="flex items-center gap-2 text-slate-300">
                 <Box size={13} className="text-cyan-400" />
                 <span>
@@ -459,7 +459,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               )}
             </div>
           </div>
-        ) : selectedObject ? (
+        ) : selectedObject && !showProjectInventory ? (
           /* Selected 3D object has NO Saipem_IDENT */
           <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 space-y-1.5">
             <div className="flex items-center gap-2 text-amber-300 text-xs font-semibold">
@@ -522,7 +522,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             title="View and edit live project schedule for this Saipem_IDENT"
           >
             <FileSpreadsheet size={13} className="text-emerald-400" />
-            <span>Tracking & Status</span>
+            <span>Schedule</span>
           </button>
           <button
             type="button"
@@ -531,7 +531,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             title="View all 3D pieces sharing the same Saipem_IDENT in this project"
           >
             <Box size={13} className="text-cyan-400" />
-            <span>Same IDENT ({sameIdentDbIds.length})</span>
+            <span>Parts ({sameIdentDbIds.length})</span>
           </button>
           <button
             type="button"
@@ -540,7 +540,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             title="View properties related to this Saipem_IDENT and project"
           >
             <Grid size={13} />
-            <span>Identity Props</span>
+            <span>Properties</span>
           </button>
         </div>
       ) : null}
@@ -557,7 +557,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   <div className="modern-category-header">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <Database size={13} className="text-cyan-400" />
-                      <span className="modern-category-title truncate">Project Schedule Record</span>
+                      <span className="modern-category-title truncate">Schedule record</span>
                     </div>
                     {hasScheduleData ? (
                       <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-semibold border border-emerald-500/30 flex items-center gap-1">
@@ -589,8 +589,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         <FileSpreadsheet size={14} className="text-emerald-400 shrink-0" />
                         <span className="truncate">
                           {hasScheduleData
-                            ? `Change in Schedule Data Dialog`
-                            : `Select from ${projectScheduleList.length} Records in Data Dialog...`}
+                            ? `Change schedule record`
+                            : `Browse records (${projectScheduleList.length})`}
                         </span>
                       </div>
                       <ExternalLink size={13} className="text-cyan-400 shrink-0" />
@@ -599,17 +599,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 </div>
 
                 {/* Project & IDENT Verification Card */}
-                <div className="modern-category-card">
+                <div className="modern-category-card project-verification-card">
                   <div className="modern-category-header">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <Building2 size={13} className="text-cyan-400" />
-                      <span className="modern-category-title truncate">Project Scope Verification</span>
+                      <span className="modern-category-title">Project verification</span>
                     </div>
-                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-semibold border border-emerald-500/30">
+                    <span className="project-matched-badge">
+                      <CheckCircle2 size={12} aria-hidden="true" />
                       Project Matched
                     </span>
                   </div>
-                  <div className="p-2.5 space-y-2 text-xs">
+                  <div className="project-verification-details">
                     <div className="flex justify-between items-center text-slate-300">
                       <span className="text-slate-400 text-[11px]">Active Project:</span>
                       <strong className="text-cyan-300 font-semibold truncate max-w-[180px]" title={selectedProject.name}>
@@ -639,16 +640,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
                 {/* Construction Progress & Status (Strictly Read-Only Verified Data) */}
                 {(() => {
-                  const statusTheme = getStatusTheme(currentSchedule.status);
+                  const statusTheme = getStatusTheme(effectiveStatus(currentSchedule));
                   return (
                     <div className="modern-category-card">
                       <div className="modern-category-header">
                         <div className="flex items-center gap-1.5">
                           <Sliders size={13} className="text-cyan-400" />
-                          <span className="modern-category-title">Verified Construction Status</span>
+                          <span className="modern-category-title">Construction progress</span>
                         </div>
                         <span className="text-[10px] uppercase font-bold text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/60">
-                          Read-Only Schedule
+                          Read only
                         </span>
                       </div>
 
@@ -657,7 +658,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         <div>
                           <div className="flex justify-between items-baseline mb-1.5">
                             <span className="text-[11px] text-slate-400">Completion Progress</span>
-                            <span className="font-mono text-base font-black text-cyan-300">
+                            <span className={`font-mono text-base font-black ${statusTheme.text}`}>
                               {currentSchedule.completionPercentage}%
                             </span>
                           </div>
@@ -676,7 +677,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                             <div className="flex flex-col min-w-0">
                               <span className="text-[10px] text-slate-400 uppercase tracking-wide">Status</span>
                               <span className={`text-xs font-bold capitalize truncate ${statusTheme.text}`}>
-                                {currentSchedule.status.replace('_', ' ')}
+                                {effectiveStatus(currentSchedule).replace('_', ' ')}
                               </span>
                             </div>
                           </div>
@@ -694,13 +695,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   <div className="modern-category-header">
                     <div className="flex items-center gap-1.5">
                       <Calendar size={13} className="text-cyan-400" />
-                      <span className="modern-category-title">Timeline & Contractor Schedule</span>
+                      <span className="modern-category-title">Timeline & assignment</span>
                     </div>
                   </div>
 
                   <div className="p-3 space-y-2.5">
                     {/* Start and End Dates */}
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="inspector-date-grid">
                       <div className="p-2 rounded-lg bg-slate-900/60 border border-slate-800">
                         <span className="text-[10px] text-slate-400 block mb-0.5">Start Date</span>
                         <span className="text-xs font-mono font-semibold text-slate-200">
@@ -758,6 +759,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     className="btn-secondary w-full text-xs py-2 flex items-center justify-center gap-1.5"
                     onClick={() => {
                       setUserSelectedIdent(null);
+                      setIdentListSearch('');
+                      setShowProjectInventory(true);
                     }}
                   >
                     <span>View All Project Saipem_IDENTs</span>
@@ -1011,15 +1014,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             ) : (
               <div className="space-y-2">
                 {filteredProjectIdents.map((id) => {
-                  const schedule = projectScheduleMap[id];
-                  const modelPartsCount = modelIdentsMap[id]?.dbIds?.length || (schedule?.dbId ? 1 : 0);
+                  const schedule = findScheduleRecord(projectScheduleMap, id);
+                  const modelPartsCount = modelIdentsMap[id]?.dbIds?.length || new Set(
+                    Object.values(projectScheduleMap).filter((item) => item.saipemIdent === id && item.dbId != null).map((item) => item.dbId)
+                  ).size;
                   const completion = schedule?.completionPercentage ?? 0;
-                  const status = schedule?.status || 'not_started';
+                  const status = schedule ? effectiveStatus(schedule) : 'not_started';
 
                   return (
                     <div
                       key={id}
                       onClick={() => {
+                        setShowProjectInventory(false);
                         setUserSelectedIdent(id);
                         if (onSelectSaipemIdent) {
                           onSelectSaipemIdent(id);
@@ -1038,12 +1044,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                             {id}
                           </span>
                         </div>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${status === 'completed'
+                        <span style={{ color: STATUS_COLORS[status], borderColor: STATUS_COLORS[status], background: `${STATUS_COLORS[status]}26` }} className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${status === 'completed'
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                           : status === 'in_progress'
-                            ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                            ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30'
                             : status === 'delayed'
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              ? 'bg-red-500/20 text-red-300 border border-red-500/30'
                               : 'bg-slate-700/60 text-slate-300'
                           }`}>
                           {status.replace('_', ' ')}
@@ -1060,12 +1066,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       <div className="space-y-1">
                         <div className="flex justify-between items-center text-[10px] text-slate-400">
                           <span>{modelPartsCount} {modelPartsCount === 1 ? 'part' : 'parts'} in 3D model</span>
-                          <span className="font-mono text-cyan-400 font-bold">{completion}%</span>
+                          <span className="font-mono font-bold" style={{ color: STATUS_COLORS[status] }}>{completion}%</span>
                         </div>
                         <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-cyan-500 rounded-full transition-all"
-                            style={{ width: `${completion}%` }}
+                            style={{ width: `${completion}%`, background: STATUS_COLORS[status] }}
                           />
                         </div>
                       </div>

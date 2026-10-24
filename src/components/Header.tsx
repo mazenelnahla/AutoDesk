@@ -7,9 +7,7 @@ import {
   ChevronDown,
   RefreshCw,
   ExternalLink,
-  FileSpreadsheet,
-  PanelLeft,
-  PanelRight
+  FileSpreadsheet
 } from 'lucide-react';
 import type { APSUser } from '../types/aps';
 
@@ -21,10 +19,6 @@ interface HeaderProps {
   isLoadingAuth: boolean;
   onOpenExcelModal?: () => void;
   totalScheduleCount?: number;
-  isLeftCollapsed?: boolean;
-  onToggleLeftSidebar?: () => void;
-  isRightCollapsed?: boolean;
-  onToggleRightSidebar?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -35,10 +29,6 @@ export const Header: React.FC<HeaderProps> = ({
   isLoadingAuth,
   onOpenExcelModal,
   totalScheduleCount = 0,
-  isLeftCollapsed = false,
-  onToggleLeftSidebar,
-  isRightCollapsed = false,
-  onToggleRightSidebar,
 }) => {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
 
@@ -56,28 +46,6 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="header-actions">
-        {/* Sidebar Panel Toggles */}
-        {isAuthenticated && onToggleLeftSidebar && onToggleRightSidebar && (
-          <div className="flex items-center gap-1 bg-slate-900/60 p-0.5 rounded-lg border border-slate-800">
-            <button
-              type="button"
-              className={`btn-header-panel-toggle ${!isLeftCollapsed ? 'active' : ''}`}
-              onClick={onToggleLeftSidebar}
-              title={isLeftCollapsed ? 'Open Left Sidebar (Files & AI)' : 'Collapse Left Sidebar'}
-            >
-              <PanelLeft size={16} />
-            </button>
-            <button
-              type="button"
-              className={`btn-header-panel-toggle ${!isRightCollapsed ? 'active' : ''}`}
-              onClick={onToggleRightSidebar}
-              title={isRightCollapsed ? 'Open Right Inspector Panel' : 'Collapse Right Inspector Panel'}
-            >
-              <PanelRight size={16} />
-            </button>
-          </div>
-        )}
-
         {/* Global Upload / Manage Excel Button */}
         {isAuthenticated && onOpenExcelModal && (
           <button

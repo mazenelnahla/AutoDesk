@@ -1,3 +1,4 @@
+import { STATUS_COLORS, effectiveStatus } from '../utils/statusColors';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Box,
@@ -11,6 +12,7 @@ import {
 import type { APSItem, ElementScheduleData, ScannedModelIdentMap } from '../types/aps';
 import { getPublicToken } from '../services/apsData';
 import { extractSaipemIdentFromProps } from '../utils/excelSchedule';
+import { PartProgressPanel } from './PartProgressPanel';
 
 declare global {
   interface Window {
@@ -33,6 +35,7 @@ interface AutodeskViewerProps {
   isIsolated?: boolean;
   isolateTrigger?: number;
   onClearIsolation?: () => void;
+  onIsolatePart?: (dbId?: number, ident?: string, dbIds?: number[]) => void;
   onModelIdentsScanned?: (scanned: ScannedModelIdentMap) => void;
   onModelSectionsScanned?: (sections: import('../types/aps').ProjectSection[]) => void;
 }
@@ -51,6 +54,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
   isIsolated = false,
   isolateTrigger,
   onClearIsolation,
+  onIsolatePart,
   onModelIdentsScanned,
   onModelSectionsScanned,
 }) => {
@@ -60,7 +64,6 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
   const [isLoadingViewer, setIsLoadingViewer] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const isDarkTheme = true;
-  const isThemingEnabled = true;
 
   // Map of Saipem_IDENT to dbIds scanned from the model
   const modelIdentToDbIds = useRef<Record<string, number[]>>({});
@@ -80,6 +83,41 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
     onModelSectionsScannedRef.current = onModelSectionsScanned;
   }, [onModelSectionsScanned]);
 
+  const scheduleDataRef = useRef(scheduleDataMap);
+  scheduleDataRef.current = scheduleDataMap;
+
+  const applyModelColors = useCallback((viewer: any) => {
+    const model = viewer?.model;
+    const tree = model?.getInstanceTree();
+    const THREE = window.THREE || window.Autodesk?.Viewing?.Private?.THREE;
+    if (!tree || !THREE || viewerRef.current !== viewer) return;
+
+    const colors = Object.fromEntries(Object.entries(STATUS_COLORS).map(([status, hex]) => {
+      const value = parseInt(hex.slice(1), 16);
+      return [status, new THREE.Vector4(((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255, 1)];
+    }));
+    const gray = colors.not_started;
+
+    viewer.clearThemingColors(model);
+    // Full intensity replaces the source material color, including untracked parts.
+    viewer.setThemingColor(tree.getRootId(), gray, model, true);
+
+    // Explicit part records override shared IDENT records.
+    Object.values(scheduleDataRef.current)
+      .sort((a, b) => Number(a.dbId != null) - Number(b.dbId != null))
+      .forEach((item) => {
+        const dbIds = item.dbId != null
+          ? [item.dbId]
+          : modelIdentToDbIds.current[item.saipemIdent] || [];
+        const color = colors[effectiveStatus(item)];
+        dbIds.forEach((dbId) => viewer.setThemingColor(dbId, color, model, true));
+      });
+  }, []);
+
+  useEffect(() => {
+    applyModelColors(viewerRef.current);
+  }, [scheduleDataMap, applyModelColors]);
+
   // Scan all model nodes to index Saipem_IDENT properties and sections once the model is loaded
   const indexModelProperties = useCallback((viewer: any) => {
     if (!viewer?.model) return;
@@ -89,14 +127,25 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
 
     modelIdentToDbIds.current = {};
 
-    viewer.model.getBulkProperties([], { propFilter: [] }, (props: any[]) => {
-      if (!props) return;
+    const nodeIds: number[] = [];
+    instanceTree.enumNodeChildren(instanceTree.getRootId(), (id: number) => {
+      let hasGeometry = false;
+      instanceTree.enumNodeFragments(id, () => { hasGeometry = true; }, false);
+      if (hasGeometry) nodeIds.push(id);
+    }, true);
+    const model = viewer.model;
+    Promise.all([
+      new Promise<any[]>((resolve, reject) => model.getBulkProperties(nodeIds, { ignoreHidden: false }, resolve, reject)),
+      new Promise<Record<string, number>>((resolve, reject) => model.getExternalIdMapping(resolve, reject)),
+    ]).then(([props, externalIds]) => {
+      const externalIdByDbId = new Map(Object.entries(externalIds).map(([externalId, dbId]) => [dbId, externalId]));
+      if (!props || viewerRef.current !== viewer) return;
       const scannedMap: ScannedModelIdentMap = {};
       const sectionMap: Record<string, { name: string; category?: string; dbIds: number[]; idents: Set<string> }> = {};
 
       props.forEach((item) => {
         if (!item.properties) return;
-        const ident = extractSaipemIdentFromProps(item.properties);
+        const ident = extractSaipemIdentFromProps(item.properties) || `MODEL-ELEMENT-${item.dbId}`;
 
         // Find Category / Family / Section
         const catProp = item.properties.find((p: any) => {
@@ -133,8 +182,20 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
           } else {
             scannedMap[ident].dbIds.push(item.dbId);
           }
+          scannedMap[ident].elements ??= {};
+          scannedMap[ident].elements![item.dbId] = {
+            name: item.name,
+            category: catProp ? String(catProp.displayValue) : undefined,
+            externalId: item.externalId || externalIdByDbId.get(item.dbId),
+            parameters: Object.fromEntries(item.properties.map((p: any) => [
+              `${p.displayCategory || 'General'}/${p.displayName || p.attributeName}`,
+              String(p.displayValue ?? ''),
+            ])),
+          };
         }
       });
+
+      applyModelColors(viewer);
 
       if (onModelIdentsScannedRef.current) {
         onModelIdentsScannedRef.current(scannedMap);
@@ -155,67 +216,11 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
 
         onModelSectionsScannedRef.current(sectionsList);
       }
+    }).catch((error: unknown) => {
+      console.error('Model inventory scan failed', error);
+      setViewerError('Could not scan model properties. Reload the model to retry.');
     });
-  }, []);
-
-  // Apply or clear 3D Theming Colors based on schedule completion & status without reloading viewer
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer || !viewer.model) return;
-
-    // Autodesk / THREE Vector4 color constants
-    const THREE = window.THREE || window.Autodesk?.Viewing?.Private?.THREE;
-    if (!THREE) return;
-
-    const colorGreen = new THREE.Vector4(0.13, 0.77, 0.36, 0.85); // Completed (100%)
-    const colorCyan = new THREE.Vector4(0.02, 0.71, 0.83, 0.85);  // High Progress (75-99%)
-    const colorBlue = new THREE.Vector4(0.23, 0.51, 0.96, 0.85);  // Mid Progress (25-74%)
-    const colorAmber = new THREE.Vector4(0.96, 0.62, 0.04, 0.85); // Delayed
-    const colorPurple = new THREE.Vector4(0.64, 0.38, 0.96, 0.85); // Initial (1-24%)
-
-    if (!isThemingEnabled) {
-      viewer.clearThemingColors(viewer.model);
-      return;
-    }
-
-    viewer.clearThemingColors(viewer.model);
-
-    // Iterate through all schedule items and color their corresponding dbIds
-    Object.values(scheduleDataMap).forEach((item) => {
-      let targetDbIds: number[] = [];
-
-      if (item.dbId) {
-        targetDbIds.push(item.dbId);
-      }
-
-      // Check if scanned index has dbIds for this Saipem_IDENT
-      if (item.saipemIdent && modelIdentToDbIds.current[item.saipemIdent]) {
-        targetDbIds = [...targetDbIds, ...modelIdentToDbIds.current[item.saipemIdent]];
-      }
-
-      if (targetDbIds.length === 0) return;
-
-      let themeColor = null;
-
-      if (item.status === 'delayed') {
-        themeColor = colorAmber;
-      } else if (item.status === 'completed' || item.completionPercentage >= 100) {
-        themeColor = colorGreen;
-      } else if (item.completionPercentage >= 75) {
-        themeColor = colorCyan;
-      } else if (item.completionPercentage >= 25) {
-        themeColor = colorBlue;
-      } else if (item.completionPercentage > 0) {
-        themeColor = colorPurple;
-      }
-
-      if (themeColor) {
-        targetDbIds.forEach((dbId) => {
-          viewer.setThemingColor(dbId, themeColor, viewer.model, true);
-        });
-      }
-    });
-  }, [scheduleDataMap, isThemingEnabled]);
+  }, [applyModelColors]);
 
   // Internal count of isolated parts for badge indicator
   const [isolatedPartsCount, setIsolatedPartsCount] = useState<number>(0);
@@ -356,6 +361,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
       }
 
       viewer.setTheme(isDarkTheme ? 'dark-theme' : 'light-theme');
+      viewer.setGhosting(true);
       viewerRef.current = viewer;
       (window as any).apsViewer = viewer;
 
@@ -390,10 +396,19 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         onSelectionChanged
       );
 
+      modelIdentToDbIds.current = {};
+
+      // Apply the base color as soon as the tree exists, including streamed geometry.
+      viewer.addEventListener(
+        window.Autodesk.Viewing.OBJECT_TREE_CREATED_EVENT,
+        () => applyModelColors(viewer)
+      );
+
       // Listen for model geometry loaded to index properties
       viewer.addEventListener(
         window.Autodesk.Viewing.GEOMETRY_LOADED_EVENT,
         () => {
+          applyModelColors(viewer);
           indexModelProperties(viewer);
         }
       );
@@ -404,6 +419,7 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         const defaultGeometry = doc.getRoot().getDefaultGeometry();
         viewer.loadDocumentNode(doc, defaultGeometry)
           .then(() => {
+            applyModelColors(viewer);
             setIsLoadingViewer(false);
           })
           .catch((err: any) => {
@@ -436,8 +452,20 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         }
       }
     };
-  }, [activeUrn, indexModelProperties]);
+  }, [activeUrn, indexModelProperties, applyModelColors]);
 
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => viewerRef.current?.resize());
+    });
+    observer.observe(container);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [activeUrn, isAuthenticated]);
 
   const trackedCount = Object.keys(scheduleDataMap).length;
 
@@ -522,6 +550,16 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
 
 
       </div>
+      {selectedItem && <PartProgressPanel records={scheduleDataMap} onFocus={(dbId) => {
+        const viewer = viewerRef.current;
+        if (!viewer?.model) return;
+        viewer.setGhosting(true);
+        viewer.isolate([dbId], viewer.model);
+        viewer.select([dbId]);
+        viewer.fitToView([dbId]);
+        setIsolatedPartsCount(1);
+        onIsolatePart?.(dbId, undefined, [dbId]);
+      }} />}
     </div>
   );
 };

@@ -1,7 +1,9 @@
+import { matchesModelCategory } from '../utils/modelCategory';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Bot,
   Send,
+  Square,
   RefreshCw,
   Settings,
   Trash2,
@@ -51,15 +53,6 @@ interface ChatbotSectionProps {
   onClearIsolation: () => void;
   onToggleCollapse?: () => void;
 }
-
-const DEFAULT_QUICK_ACTIONS = [
-  { label: 'Isolate Delayed', prompt: 'Isolate all elements that are delayed behind schedule' },
-  { label: 'Show Walls', prompt: 'Filter and show only Walls in the 3D viewer' },
-  { label: 'Doors & Windows', prompt: 'Show all doors and windows' },
-  { label: 'Schedule Progress', prompt: 'Color code the model by construction schedule progress' },
-  { label: 'Show Full Model', prompt: 'Show all model elements and reset isolation' },
-  { label: 'Model Summary', prompt: 'Summarize model categories, elements and schedule status' },
-];
 
 /**
  * Clean & Compact Markdown Renderer.
@@ -237,19 +230,17 @@ export const ChatbotSection: React.FC<ChatbotSectionProps> = ({
       id: 'welcome-msg',
       sender: 'assistant',
       text: `### Autodesk BIM Bot
-Connected to local **LM Studio** AI. You can ask me to analyze the model, review schedule progress, or filter and isolate elements.
-
-Try clicking a quick prompt below or type:
-- *Isolate all walls*
-- *Show delayed elements*
-- *Reset viewer to show everything*`,
+Connected to local **LM Studio** AI. You can ask me to analyze the model, review schedule progress, or filter and isolate elements.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
 
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const requestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => requestRef.current?.abort(), []);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
 
   // LM Studio Connection States
   const [serverUrl, setServerUrl] = useState<string>(getSavedLMStudioUrl());
@@ -336,7 +327,8 @@ Try clicking a quick prompt below or type:
   }, [refreshHealth]);
 
   const executeViewerAction = useCallback(
-    (action: ViewerAiAction) => {
+    async (action: ViewerAiAction, signal?: AbortSignal) => {
+      signal?.throwIfAborted();
       if (!action) return;
 
       if (action.type === 'clear_isolation') {
@@ -366,42 +358,48 @@ Try clicking a quick prompt below or type:
         return;
       }
 
-      if (action.type === 'select' && action.dbIds) {
-        if (window.Autodesk?.Viewing && (window as any).apsViewer) {
-          try {
-            (window as any).apsViewer.select(action.dbIds);
-            (window as any).apsViewer.fitToView(action.dbIds);
-          } catch (e) {
-            console.warn(e);
+      if (action.type === 'select' || (action.type === 'isolate' && (action.target === 'category' || action.target === 'element'))) {
+        const viewer = (window as any).apsViewer;
+        if (!viewer?.model) throw new Error('Load a 3D model before selecting elements.');
+        let ids = action.dbIds || [];
+        if (action.target === 'category' || action.target === 'element') {
+          const category = String(action.value || '').trim();
+          if (!category) throw new Error('Specify a category to select.');
+          // Validate each element: a section named IfcBeam can contain HANDRAIL elements.
+          ids = [];
+          if (!ids.length) {
+            // Search only element identity fields. An unrestricted viewer search also
+            // matches materials and unrelated properties (e.g. pipe handrails).
+            ids = await new Promise<number[]>((resolve, reject) => {
+              viewer.model.getBulkProperties([], {}, (elements: Array<{ dbId: number; name?: string; properties?: any[] }>) => {
+                const tree = viewer.model.getInstanceTree();
+                const matchesIntent = (element: typeof elements[number], complete = false) => {
+                  // Isolating a container reveals all descendants, including other
+                  // element kinds. Match individual components instead.
+                  if (tree && tree.getChildCount(element.dbId) > 0) return false;
+                  if (action.target !== 'element') return matchesModelCategory(element, category, complete);
+                  return (element.properties || []).some((property) =>
+                    /^element\s*:?$/i.test(String(property.displayName || property.attributeName || '').trim()) &&
+                    matchesModelCategory({ name: String(property.displayValue || '') }, category, complete)
+                  );
+                };
+                const exact = elements.filter((element) => matchesIntent(element));
+                const matches = exact.length ? exact : elements.filter((element) => matchesIntent(element, true));
+                resolve(matches.map((element) => element.dbId));
+              }, () => reject(new Error('Could not read model categories. Please wait for the model to finish loading.')));
+            });
           }
         }
-        return;
+        signal?.throwIfAborted();
+        ids = [...new Set(ids)];
+        if (!ids.length) throw new Error(`No elements matched "${action.value || action.label}" in the loaded model.`);
+        if (action.type === 'select') viewer.select(ids);
+        else onIsolatePart(undefined, undefined, ids);
+        viewer.fitToView(ids);
+        return ids.length;
       }
 
       if (action.type === 'isolate') {
-        if (action.target === 'category') {
-          const catName = String(action.value || '').toLowerCase().trim();
-          let matchedDbIds: number[] = [];
-
-          for (const sec of modelSections) {
-            const secLower = sec.name.toLowerCase();
-            if (secLower === catName || secLower.includes(catName) || catName.includes(secLower)) {
-              if (sec.dbIds && sec.dbIds.length > 0) {
-                matchedDbIds.push(...sec.dbIds);
-              }
-            }
-          }
-
-          matchedDbIds = Array.from(new Set(matchedDbIds));
-
-          if (matchedDbIds.length > 0) {
-            onIsolatePart(undefined, undefined, matchedDbIds);
-          } else if (action.dbIds && action.dbIds.length > 0) {
-            onIsolatePart(undefined, undefined, action.dbIds);
-          }
-          return;
-        }
-
         if (action.target === 'status') {
           const targetStatus = String(action.value || 'delayed').toLowerCase().trim();
           const matchedItems = Object.values(scheduleDataMap).filter(
@@ -413,7 +411,7 @@ Try clicking a quick prompt below or type:
           let targetDbIds: number[] = [];
           matchedItems.forEach((item) => {
             if (item.dbId) targetDbIds.push(item.dbId);
-            if (item.saipemIdent && modelIdentsMap[item.saipemIdent]?.dbIds) {
+            if (item.dbId == null && item.saipemIdent && modelIdentsMap[item.saipemIdent]?.dbIds) {
               targetDbIds.push(...modelIdentsMap[item.saipemIdent].dbIds);
             }
           });
@@ -442,7 +440,9 @@ Try clicking a quick prompt below or type:
 
   const handleSendMessage = async (textToSend?: string) => {
     const prompt = (textToSend || inputPrompt).trim();
-    if (!prompt || isGenerating) return;
+    if (!prompt || requestRef.current) return;
+    const controller = new AbortController();
+    requestRef.current = controller;
 
     setInputPrompt('');
     if (inputRef.current) {
@@ -490,36 +490,54 @@ Try clicking a quick prompt below or type:
         context: bimContext,
         url: serverUrl,
         model: selectedModel,
+        signal: controller.signal,
       });
+      controller.signal.throwIfAborted();
 
+      const appliedCount = result.action ? await executeViewerAction(result.action, controller.signal) : undefined;
+      controller.signal.throwIfAborted();
       const assistantMessage: ChatMessage = {
         id: `assistant-${Date.now()}`,
         sender: 'assistant',
-        text: result.text,
+        text: typeof appliedCount === 'number'
+          ? `${result.action?.type === 'select' ? 'Selected' : 'Isolated'} **${appliedCount} elements** matching **${result.action?.value || result.action?.label}**.`
+          : result.text,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         action: result.action,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
 
-      if (result.action) {
-        executeViewerAction(result.action);
-      }
+
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       setMessages((prev) => [
         ...prev,
         {
           id: `err-${Date.now()}`,
           sender: 'assistant',
-          text: `⚠️ **Connection Error**: ${err.message || 'Unable to connect to LM Studio.'}`,
+          text: `⚠️ **Unable to complete request**: ${err.message || 'Unable to connect to LM Studio.'}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isError: true,
         },
       ]);
     } finally {
-      setIsGenerating(false);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setIsGenerating(false);
+      }
       setTimeout(() => scrollToBottom(true), 50);
     }
+  };
+
+  const handleStop = () => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setIsGenerating(false);
+    setMessages((previous) => [...previous, {
+      id: `stopped-${Date.now()}`, sender: 'assistant', text: 'Response stopped.',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -536,10 +554,15 @@ Try clicking a quick prompt below or type:
     refreshHealth(serverUrl);
   };
 
-  const handleCopyMessage = (msgId: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedMsgId(msgId);
-    setTimeout(() => setCopiedMsgId(null), 1500);
+  const handleCopyMessage = async (msgId: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyErrorId(null);
+      setCopiedMsgId(msgId);
+      setTimeout(() => setCopiedMsgId((current) => current === msgId ? null : current), 2000);
+    } catch {
+      setCopyErrorId(msgId);
+    }
   };
 
   return (
@@ -748,17 +771,6 @@ Try clicking a quick prompt below or type:
                   : 'chat-bubble-assistant'
               }`}
             >
-              {msg.sender === 'assistant' && (
-                <button
-                  type="button"
-                  className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-slate-200 transition-opacity"
-                  onClick={() => handleCopyMessage(msg.id, msg.text)}
-                  title="Copy"
-                >
-                  {copiedMsgId === msg.id ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
-                </button>
-              )}
-
               {msg.sender === 'user' ? (
                 <div className="whitespace-pre-wrap">{msg.text}</div>
               ) : (
@@ -777,7 +789,9 @@ Try clicking a quick prompt below or type:
                     <button
                       type="button"
                       className="px-2 py-0.5 rounded bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-200 text-[10px] font-medium border border-cyan-500/30 transition-colors flex items-center gap-1"
-                      onClick={() => executeViewerAction(msg.action!)}
+                      onClick={() => { void executeViewerAction(msg.action!).catch((error: Error) => {
+                        setMessages((previous) => [...previous, { id: `action-error-${Date.now()}`, sender: 'assistant', text: error.message, timestamp: new Date().toLocaleTimeString(), isError: true }]);
+                      }); }}
                     >
                       <Layers size={10} />
                       <span>Apply</span>
@@ -813,6 +827,18 @@ Try clicking a quick prompt below or type:
                   </div>
                 </div>
               )}
+            </div>
+            <div className="chat-message-toolbar">
+              <button
+                type="button"
+                className={`chat-message-copy${copiedMsgId === msg.id ? ' is-copied' : ''}`}
+                onClick={() => { void handleCopyMessage(msg.id, msg.text); }}
+                title={copyErrorId === msg.id ? 'Copy failed. Try again.' : copiedMsgId === msg.id ? 'Copied to clipboard' : 'Copy message'}
+                aria-label={copiedMsgId === msg.id ? 'Message copied' : 'Copy message'}
+              >
+                {copiedMsgId === msg.id ? <Check size={13} /> : <Copy size={13} />}
+                <span aria-live="polite">{copyErrorId === msg.id ? 'Retry copy' : copiedMsgId === msg.id ? 'Copied' : 'Copy'}</span>
+              </button>
             </div>
           </div>
         ))}
@@ -857,30 +883,14 @@ Try clicking a quick prompt below or type:
         </button>
       )}
 
-      {/* 4. Quick Action Chips (Uniform monochrome) */}
-      <div className="px-2.5 py-1.5 bg-slate-900/50 border-t border-slate-800 shrink-0">
-        <div className="flex gap-1 overflow-x-auto pb-0.5 scrollbar-none">
-          {DEFAULT_QUICK_ACTIONS.map((item, idx) => (
-            <button
-              key={idx}
-              type="button"
-              className="quick-chip shrink-0"
-              onClick={() => handleSendMessage(item.prompt)}
-              disabled={isGenerating}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 5. Modern Prettier Input Bar */}
+      {/* Prompt composer */}
       <div className="chatbot-input-container shrink-0">
-        <div className="chat-input-capsule">
+        <div className={`chat-input-capsule${isGenerating ? ' is-generating' : ''}`}>
           <textarea
             ref={inputRef}
             className="chat-textarea"
-            placeholder="Ask AI to filter or control 3D viewer..."
+            aria-label="Message BIM AI"
+            placeholder="Ask about your model…"
             rows={1}
             value={inputPrompt}
             onChange={(e) => setInputPrompt(e.target.value)}
@@ -889,15 +899,16 @@ Try clicking a quick prompt below or type:
           />
           <button
             type="button"
-            className={`chat-send-btn ${inputPrompt.trim() && !isGenerating ? 'active' : ''}`}
-            onClick={() => handleSendMessage()}
-            disabled={!inputPrompt.trim() || isGenerating}
-            title="Send prompt (Enter)"
+            className={`chat-send-btn ${isGenerating ? 'chat-stop-btn' : inputPrompt.trim() ? 'active' : ''}`}
+            onClick={() => isGenerating ? handleStop() : handleSendMessage()}
+            disabled={!isGenerating && !inputPrompt.trim()}
+            title={isGenerating ? 'Stop response' : 'Send prompt (Enter)'}
+            aria-label={isGenerating ? 'Stop response' : 'Send message'}
           >
-            <Send size={13} />
+            {isGenerating ? <Square size={12} fill="currentColor" /> : <Send size={13} />}
           </button>
         </div>
-        <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1.5 px-0.5 font-medium">
+        <div className="chat-composer-footer flex items-center justify-between text-[10px] text-slate-400 mt-1.5 px-0.5 font-medium">
           <div className="flex items-center gap-1 text-slate-500">
             <kbd className="px-1 py-0.2 rounded bg-slate-800 border border-slate-700/80 text-[9px] font-mono text-slate-400">↵</kbd>
             <span>send</span>

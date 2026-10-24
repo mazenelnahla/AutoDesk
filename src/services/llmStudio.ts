@@ -17,7 +17,7 @@ export interface LMStudioStatus {
 
 export interface ViewerAiAction {
   type: 'isolate' | 'clear_isolation' | 'select' | 'fit_view' | 'theme_status';
-  target: 'category' | 'ident' | 'status' | 'dbIds' | 'all';
+  target: 'element' | 'category' | 'ident' | 'status' | 'dbIds' | 'all';
   value?: any; // e.g. category name, ident code, status string, array of dbIds
   label: string;
   elementCount?: number;
@@ -286,12 +286,12 @@ export function processLocalHeuristicCommand(
   }
 
   // 2. Schedule status filtering: Delayed
-  if (p.includes('delay') || p.includes('late') || p.includes('behind schedule')) {
+  if ( /\b(?:delay(?:ed|s)?|late|behind schedule)\b/.test(p)) {
     const delayed = Object.values(scheduleDataMap).filter((s) => s.status === 'delayed');
     const delayedDbIds: number[] = [];
     delayed.forEach((item) => {
       if (item.dbId) delayedDbIds.push(item.dbId);
-      if (item.saipemIdent && modelIdentsMap[item.saipemIdent]?.dbIds) {
+      if (item.dbId == null && item.saipemIdent && modelIdentsMap[item.saipemIdent]?.dbIds) {
         delayedDbIds.push(...modelIdentsMap[item.saipemIdent].dbIds);
       }
     });
@@ -317,7 +317,7 @@ export function processLocalHeuristicCommand(
     const compDbIds: number[] = [];
     completed.forEach((item) => {
       if (item.dbId) compDbIds.push(item.dbId);
-      if (item.saipemIdent && modelIdentsMap[item.saipemIdent]?.dbIds) {
+      if (item.dbId == null && item.saipemIdent && modelIdentsMap[item.saipemIdent]?.dbIds) {
         compDbIds.push(...modelIdentsMap[item.saipemIdent].dbIds);
       }
     });
@@ -444,8 +444,46 @@ export async function sendChatMessageToLMStudio(params: {
   url?: string;
   model?: string;
   temperature?: number;
+  signal?: AbortSignal;
 }): Promise<{ text: string; action?: ViewerAiAction; rawResponse?: any; offlineMode?: boolean }> {
   const { messages, context, url = getSavedLMStudioUrl(), model = getSavedLMStudioModel(), temperature = 0.2 } = params;
+
+  params.signal?.throwIfAborted();
+
+  // Deterministic viewer commands should never wait for local model inference.
+  const prompt = messages[messages.length - 1]?.content || '';
+  const elementCommand = prompt.trim().match(/^(?:please\s+)?(isolate|show|select|highlight)\s+by\s+element\s*:?\s*(.*?)\s*[.!?]*$/i);
+  if (elementCommand) {
+    const value = elementCommand[2].replace(/\s+only$/i, '').trim();
+    if (!value) return { text: 'Specify an Element value, for example: isolate by Element: fireproofing.' };
+    const type = /^(select|highlight)$/i.test(elementCommand[1]) ? 'select' : 'isolate';
+    return {
+      text: `${type === 'select' ? 'Selecting' : 'Isolating'} Element **${value}**.`,
+      action: { type, target: 'element', value, label: `${type === 'select' ? 'Select' : 'Isolate'} Element: ${value}` },
+    };
+  }
+  const selection = prompt.trim().match(/^(?:please\s+)?(?:select|highlight)\s+(?:all\s+)?(?:the\s+)?(.+?)(?:\s+in\s+(?:the\s+)?(?:model|viewer))?[.!?]*$/i);
+  if (selection) {
+    const category = selection[1].replace(/[.!?]+$/, '').replace(/\s+only$/i, '').trim();
+    return {
+      text: `Selecting **${category}** in the model.`,
+      action: { type: 'select', target: 'category', value: category, label: `Select ${category}` },
+    };
+  }
+  if (/^(?:please\s+)?(?:isolate|show|hide|reset|clear|fit|zoom|focus|color|theme)\b/i.test(prompt)) {
+    const local = processLocalHeuristicCommand(prompt, context);
+    if (local.action) return { text: local.response, action: local.action };
+  }
+
+  // Unindexed IFC categories still resolve through the viewer's property search.
+  const isolation = prompt.trim().match(/^(?:please\s+)?(?:isolate|show(?:\s+only)?)\s+(?:all\s+)?(?:the\s+)?(.+?)(?:\s+in\s+(?:the\s+)?(?:model|viewer))?[.!?]*$/i);
+  if (isolation) {
+    const category = isolation[1].replace(/[.!?]+$/, '').replace(/\s+only$/i, '').trim();
+    return {
+      text: `Isolating **${category}** in the model.`,
+      action: { type: 'isolate', target: 'category', value: category, label: `Isolate ${category}` },
+    };
+  }
 
   const systemPrompt = buildBimSystemPrompt(context);
   const fullMessages = [
@@ -462,7 +500,8 @@ export async function sendChatMessageToLMStudio(params: {
       temperature,
       max_tokens: 1000,
     }, {
-      timeout: 60000,
+      timeout: 95000,
+      signal: params.signal,
     });
 
     const aiText = res.data?.choices?.[0]?.message?.content || '';
@@ -471,29 +510,9 @@ export async function sendChatMessageToLMStudio(params: {
       return { text: cleanText, action, rawResponse: res.data };
     }
   } catch (proxyErr: any) {
-    console.warn('Backend proxy chat attempt failed, trying direct LM Studio endpoint...', proxyErr?.message);
-
-    // Try direct fetch to LM Studio
-    try {
-      const directUrl = url.replace(/\/+$/, '');
-      const directRes = await axios.post(`${directUrl}/v1/chat/completions`, {
-        model: model || 'default',
-        messages: fullMessages,
-        temperature,
-        max_tokens: 1000,
-        stream: false,
-      }, {
-        timeout: 60000,
-      });
-
-      const aiText = directRes.data?.choices?.[0]?.message?.content || '';
-      if (aiText) {
-        const { cleanText, action } = extractViewerAction(aiText);
-        return { text: cleanText, action, rawResponse: directRes.data };
-      }
-    } catch (directErr) {
-      console.warn('Direct LM Studio chat also unreachable. Using BIM Heuristic Engine:', directErr);
-    }
+    if (params.signal?.aborted || axios.isCancel(proxyErr)) throw proxyErr;
+    console.warn('LM Studio request failed:', proxyErr?.message);
+    throw new Error(proxyErr.response?.data?.error || 'LM Studio did not respond. Check that the model is loaded and try again.');
   }
 
   // If LM Studio is not online or failed, use heuristic engine with friendly note

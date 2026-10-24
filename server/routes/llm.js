@@ -78,6 +78,10 @@ router.post('/chat', async (req, res) => {
     return res.status(400).json({ error: 'messages array is required' });
   }
 
+  const controller = new AbortController();
+  const cancel = () => { if (!res.writableEnded) controller.abort(); };
+  res.on('close', cancel);
+
   try {
     const payload = {
       model: model || 'default',
@@ -88,6 +92,7 @@ router.post('/chat', async (req, res) => {
     };
 
     const response = await axios.post(`${baseUrl}/v1/chat/completions`, payload, {
+      signal: controller.signal,
       timeout: 90000, // 90 seconds for local LLMs
       headers: {
         'Content-Type': 'application/json',
@@ -96,12 +101,15 @@ router.post('/chat', async (req, res) => {
 
     res.json(response.data);
   } catch (err) {
+    if (controller.signal.aborted) return;
     console.error('LM Studio Chat Proxy Error:', err.message);
     const status = err.response?.status || 502;
     res.status(status).json({
       error: err.response?.data?.error || err.message || 'Error communicating with LM Studio',
       code: err.code,
     });
+  } finally {
+    res.off('close', cancel);
   }
 });
 
