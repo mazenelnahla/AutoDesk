@@ -1,101 +1,45 @@
-import { AuthenticationClient, ResponseType } from '@aps_sdk/authentication';
+import { AuthenticationClient } from '@aps_sdk/authentication';
 import { DataManagementClient } from '@aps_sdk/data-management';
-import {
-  APS_CLIENT_ID,
-  APS_CLIENT_SECRET,
-  APS_CALLBACK_URL,
-  INTERNAL_TOKEN_SCOPES,
-  PUBLIC_TOKEN_SCOPES
-} from '../config.js';
+import { APS_CLIENT_ID, APS_CLIENT_SECRET, INTERNAL_TOKEN_SCOPES, PUBLIC_TOKEN_SCOPES } from '../config.js';
 
 const authenticationClient = new AuthenticationClient();
 const dataManagementClient = new DataManagementClient();
+const tokenCache = new Map();
 
-export const getAuthorizationUrl = () =>
-  authenticationClient.authorize(
-    APS_CLIENT_ID,
-    ResponseType.Code,
-    APS_CALLBACK_URL,
-    INTERNAL_TOKEN_SCOPES
-  );
+// Cache by scope and share in-flight requests across concurrent browser/API calls.
+export async function getApplicationToken(scopes) {
+  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
+    throw new Error('Configure APS_CLIENT_ID and APS_CLIENT_SECRET on the server.');
+  }
+  const key = [...scopes].sort().join(' ');
+  let entry = tokenCache.get(key);
+  if (entry?.credentials && entry.expiresAt > Date.now() + 60000) {
+    return { access_token: entry.credentials.access_token, expires_in: Math.max(0, Math.floor((entry.expiresAt - Date.now()) / 1000)) };
+  }
+  if (!entry?.pending) {
+    entry = {};
+    tokenCache.set(key, entry);
+    entry.pending = authenticationClient.getTwoLeggedToken(APS_CLIENT_ID, APS_CLIENT_SECRET, scopes)
+      .then(credentials => {
+        entry.credentials = credentials;
+        entry.expiresAt = Date.now() + credentials.expires_in * 1000;
+        return { access_token: credentials.access_token, expires_in: credentials.expires_in };
+      }).finally(() => { delete entry.pending; });
+  }
+  return entry.pending;
+}
 
-export const authCallbackMiddleware = async (req, res, next) => {
+export const applicationAuthMiddleware = async (req, res, next) => {
   try {
-    const internalCredentials = await authenticationClient.getThreeLeggedToken(
-      APS_CLIENT_ID,
-      req.query.code,
-      APS_CALLBACK_URL,
-      {
-        clientSecret: APS_CLIENT_SECRET
-      }
-    );
-    const publicCredentials = await authenticationClient.refreshToken(
-      internalCredentials.refresh_token,
-      APS_CLIENT_ID,
-      {
-        clientSecret: APS_CLIENT_SECRET,
-        scopes: PUBLIC_TOKEN_SCOPES
-      }
-    );
-    req.session.public_token = publicCredentials.access_token;
-    req.session.internal_token = internalCredentials.access_token;
-    req.session.refresh_token = publicCredentials.refresh_token;
-    req.session.expires_at = Date.now() + internalCredentials.expires_in * 1000;
+    req.internalOAuthToken = await getApplicationToken(INTERNAL_TOKEN_SCOPES);
     next();
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    console.error('APS application authentication failed:', error.message);
+    res.status(503).json({ error: 'APS application connection failed. Check server credentials and try again.' });
   }
 };
 
-export const authRefreshMiddleware = async (req, res, next) => {
-  const { refresh_token, expires_at } = req.session || {};
-  if (!refresh_token) {
-    res.status(401).json({ error: 'Unauthorized: Session missing refresh_token' });
-    return;
-  }
-
-  try {
-    if (expires_at < Date.now()) {
-      const internalCredentials = await authenticationClient.refreshToken(
-        refresh_token,
-        APS_CLIENT_ID,
-        {
-          clientSecret: APS_CLIENT_SECRET,
-          scopes: INTERNAL_TOKEN_SCOPES
-        }
-      );
-      const publicCredentials = await authenticationClient.refreshToken(
-        internalCredentials.refresh_token,
-        APS_CLIENT_ID,
-        {
-          clientSecret: APS_CLIENT_SECRET,
-          scopes: PUBLIC_TOKEN_SCOPES
-        }
-      );
-      req.session.public_token = publicCredentials.access_token;
-      req.session.internal_token = internalCredentials.access_token;
-      req.session.refresh_token = publicCredentials.refresh_token;
-      req.session.expires_at = Date.now() + internalCredentials.expires_in * 1000;
-    }
-    req.internalOAuthToken = {
-      access_token: req.session.internal_token,
-      expires_in: Math.round((req.session.expires_at - Date.now()) / 1000)
-    };
-    req.publicOAuthToken = {
-      access_token: req.session.public_token,
-      expires_in: Math.round((req.session.expires_at - Date.now()) / 1000)
-    };
-    next();
-  } catch (err) {
-    req.session = null;
-    res.status(401).json({ error: 'Failed to refresh token. Session cleared.' });
-  }
-};
-
-export const getUserProfile = async (accessToken) => {
-  const resp = await authenticationClient.getUserInfo(accessToken);
-  return resp;
-};
+export const getViewerToken = () => getApplicationToken(PUBLIC_TOKEN_SCOPES);
 
 export const getHubs = async (accessToken) => {
   const resp = await dataManagementClient.getHubs({ accessToken });

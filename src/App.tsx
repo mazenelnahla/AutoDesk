@@ -21,8 +21,6 @@ import type {
 } from './types/aps';
 import {
   fetchUserProfile,
-  initiateLogin,
-  initiateLogout,
 } from './services/auth';
 import {
   fetchLiveHubs,
@@ -150,17 +148,15 @@ export function App() {
     isolatedCount: isolatedDbIds?.length || 0,
   }, handleIsolatePart, handleClearIsolation);
 
-  // 1. Check current session & fetch profile on load
+  // Connect automatically using server-side APS application credentials.
   const checkSession = useCallback(async () => {
     setIsLoadingAuth(true);
     setAuthError(null);
     try {
       const profile = await fetchUserProfile();
       setUser(profile);
-      if (window.location.search.includes('auth_success')) {
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : 'Could not connect to APS.');
       setUser(null);
     } finally {
       setIsLoadingAuth(false);
@@ -395,25 +391,16 @@ export function App() {
     };
   }, [selectedProject, selectedHub, user]);
 
-  const handleLogin = () => {
-    initiateLogin();
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    initiateLogout();
-  };
-
   // If auth is loading, render the modern high-end loading screen
   if (isLoadingAuth) {
     return <AuthLoadingScreen />;
   }
 
-  // If not logged in, render the Login Landing Page
+  // Show a retry screen if the application connection fails.
   if (!user) {
     return (
       <LoginPage
-        onLogin={handleLogin}
+        onLogin={checkSession}
         isLoadingAuth={isLoadingAuth}
         authError={authError}
       />
@@ -427,8 +414,7 @@ export function App() {
       <Header
         user={user}
         isAuthenticated={!!user}
-        onLogin={handleLogin}
-        onLogout={handleLogout}
+        onLogin={checkSession}
         isLoadingAuth={isLoadingAuth}
         onOpenExcelModal={() => setIsExcelModalOpen(true)}
         totalScheduleCount={Object.keys(scheduleDataMap).length}
@@ -485,7 +471,7 @@ export function App() {
           key={`${selectedProject?.id || ""}:${selectedItem?.base64Urn || selectedItem?.id || ""}`}
           selectedItem={selectedItem}
           isAuthenticated={!!user}
-          onLoginRequest={handleLogin}
+          onLoginRequest={checkSession}
           onObjectSelected={(obj) => setSelectedObject(obj)}
           onIsolatePart={handleIsolatePart}
           scheduleDataMap={scheduleDataMap}

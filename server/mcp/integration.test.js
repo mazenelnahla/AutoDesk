@@ -9,17 +9,16 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
   const { bridgeRouter } = await import('./bridge.js');
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { if (req.get('x-test-session')) req.session = { internal_token: 'test' }; next(); });
   app.use('/api/mcp', bridgeRouter);
   const http = app.listen(0, '127.0.0.1');
   await new Promise(resolve => http.once('listening', resolve));
   const url = `http://127.0.0.1:${http.address().port}`;
   const client = new Client({ name: 'test', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath, args: ['server/mcp/index.js'], env: { ...process.env, AUTODESK_URL: url } });
-  const sync = (results = [], tabId = 'tab') => fetch(`${url}/api/mcp/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: url, 'x-test-session': 'yes' }, body: JSON.stringify({ tabId, context: { modelId: 'model', modelName: 'Test', scheduleDataMap: { A: { saipemIdent: 'A', status: 'delayed' }, B: { saipemIdent: 'B', status: 'completed' } }, modelIdentsMap: { A: { dbIds: [12] } } }, results }) });
+  const sync = (results = [], tabId = 'tab') => fetch(`${url}/api/mcp/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: url }, body: JSON.stringify({ tabId, context: { modelId: 'model', modelName: 'Test', scheduleDataMap: { A: { saipemIdent: 'A', status: 'delayed' }, B: { saipemIdent: 'B', status: 'completed' } }, modelIdentsMap: { A: { dbIds: [12] } } }, results }) });
   try {
     assert.equal((await fetch(`${url}/api/mcp/context`)).status, 401);
-    assert.equal((await fetch(`${url}/api/mcp/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+    assert.equal((await fetch(`${url}/api/mcp/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
     await client.connect(transport);
     assert.equal((await client.listTools()).tools.length, 3);
     assert.equal((await client.callTool({ name: 'get_model_context', arguments: {} })).isError, true);

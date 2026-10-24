@@ -28,7 +28,7 @@ export const AuthLoadingScreen: React.FC = () => {
           </div>
           <h2 className="auth-loading-title">Autodesk Platform Services</h2>
           <p className="auth-loading-subtitle">
-            Verifying 3-legged OAuth session & initializing ACC / BIM 360 data hub...
+            Connecting to APS & initializing ACC / BIM 360 data hub...
           </p>
         </div>
 
@@ -41,7 +41,7 @@ export const AuthLoadingScreen: React.FC = () => {
         {/* Security & Token Info Footer */}
         <div className="auth-loading-footer">
           <ShieldCheck size={14} className="text-cyan-400" />
-          <span>OAuth 2.0 PKCE Session Exchange</span>
+          <span>Application connection · No login required</span>
         </div>
       </div>
     </div>

@@ -1,8 +1,7 @@
 import express from 'express';
 import http from 'http';
-import session from 'cookie-session';
 import cors from 'cors';
-import { PORT, SERVER_SESSION_SECRET } from './config.js';
+import { PORT } from './config.js';
 import authRoutes from './routes/auth.js';
 import hubsRoutes from './routes/hubs.js';
 import llmRoutes from './routes/llm.js';
@@ -21,13 +20,6 @@ app.use(
   })
 );
 
-app.use(session({
-  name: 'session',
-  secret: SERVER_SESSION_SECRET,
-  maxAge: 24 * 60 * 60 * 1000,
-  signed: true,
-}));
-
 app.use('/api/mcp', express.json({ limit: '10mb' }), bridgeRouter);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -38,7 +30,7 @@ app.get('/api/health', (req, res) => {
     status: 'online',
     service: 'Autodesk Platform Services (APS) Backend',
     timestamp: new Date().toISOString(),
-    sessionActive: !!req.session?.internal_token
+    authType: 'two-legged'
   });
 });
 

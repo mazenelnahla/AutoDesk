@@ -53,7 +53,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             <div className="p-3 mb-4 rounded-lg bg-red-950/60 border border-red-500/40 flex items-center gap-3 text-red-200 text-sm">
               <AlertCircle size={20} className="text-red-400 shrink-0" />
               <div className="flex-1 text-left">
-                <p className="font-semibold text-red-300">Authentication Failed</p>
+                <p className="font-semibold text-red-300">APS Connection Failed</p>
                 <p className="text-xs text-red-200/80">{authError}</p>
               </div>
             </div>
@@ -68,19 +68,19 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             {isLoadingAuth ? (
               <>
                 <RefreshCw className="animate-spin" size={20} />
-                <span>Redirecting to Autodesk...</span>
+                <span>Connecting to APS...</span>
               </>
             ) : (
               <>
                 <LogIn size={20} />
-                <span>Continue with Autodesk</span>
+                <span>Retry connection</span>
               </>
             )}
           </button>
 
           <div className="login-security-notice">
             <ShieldCheck size={15} className="text-cyan-400" />
-            <span>Secure sign-in with your Autodesk account</span>
+            <span>Application access · No Autodesk login required</span>
           </div>
 
           {/* Features Grid */}

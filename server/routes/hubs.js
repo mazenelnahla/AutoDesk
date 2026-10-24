@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-  authRefreshMiddleware,
+  applicationAuthMiddleware,
   getHubs,
   getProjects,
   getProjectContents,
@@ -9,7 +9,7 @@ import {
 
 const router = express.Router();
 
-router.use(authRefreshMiddleware);
+router.use(applicationAuthMiddleware);
 
 // Get hubs
 router.get('/hubs', async (req, res, next) => {

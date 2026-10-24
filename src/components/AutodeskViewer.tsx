@@ -510,16 +510,16 @@ export const AutodeskViewer: React.FC<AutodeskViewerProps> = ({
         {!isAuthenticated ? (
           <div className="viewer-error-overlay">
             <Key size={36} className="text-cyan-400 mb-3" />
-            <p className="error-title text-lg font-bold">Autodesk Authentication Required</p>
+            <p className="error-title text-lg font-bold">APS Connection Unavailable</p>
             <p className="error-desc text-sm text-slate-300 max-w-md text-center mt-1">
-              Sign in with your Autodesk account to read live BIM 360 / ACC Hubs and render 3D models.
+              Connect the application to APS to read BIM 360 / ACC hubs and render 3D models.
             </p>
             <button
               className="btn-autodesk-login mt-4"
               onClick={onLoginRequest}
             >
               <LogIn size={16} />
-              <span>Sign in with Autodesk</span>
+              <span>Retry APS connection</span>
             </button>
           </div>
         ) : !selectedItem ? (

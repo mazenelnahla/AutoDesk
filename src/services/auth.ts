@@ -5,7 +5,8 @@ export async function fetchUserProfile(): Promise<APSUser> {
     credentials: 'include',
   });
   if (!resp.ok) {
-    throw new Error('Not authenticated');
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error || 'Could not connect to APS.');
   }
   const data = await resp.json();
   return {
@@ -13,24 +14,5 @@ export async function fetchUserProfile(): Promise<APSUser> {
     userName: data.name || 'Autodesk User',
     emailId: data.email || '',
     picture: data.picture || undefined,
-  };
-}
-
-export function initiateLogin(): void {
-  window.location.href = '/api/auth/login';
-}
-
-export function initiateLogout(): void {
-  const iframe = document.createElement('iframe');
-  iframe.style.visibility = 'hidden';
-  iframe.src = 'https://accounts.autodesk.com/Authentication/LogOut';
-  document.body.appendChild(iframe);
-  iframe.onload = () => {
-    window.location.replace('/api/auth/logout');
-    try {
-      document.body.removeChild(iframe);
-    } catch (e) {
-      console.warn('Logout iframe removal notice:', e);
-    }
   };
 }

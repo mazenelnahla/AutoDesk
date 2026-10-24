@@ -9,13 +9,12 @@ const pending = new Map();
 const token = process.env.MCP_BRIDGE_TOKEN;
 
 function fresh() {
-  if (!snapshot || Date.now() - updatedAt > 10000) throw new Error('Open one signed-in AutoDesk browser tab with a model loaded.');
+  if (!snapshot || Date.now() - updatedAt > 10000) throw new Error('Open one AutoDesk browser tab with a model loaded.');
 }
 
 bridgeRouter.use((req, res, next) => {
-  // Browser publishing requires the existing Autodesk login and a same-origin request.
+  // Browser publishing requires a same-origin request; APS uses application credentials.
   if (req.path === '/sync') {
-    if (!req.session?.internal_token) return res.sendStatus(401);
     if (req.get('origin') !== `${req.protocol}://${req.get('host')}`) return res.sendStatus(403);
   } else {
     const supplied = Buffer.from(req.get('authorization') || '');

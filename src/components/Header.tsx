@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Box,
   LogIn,
-  LogOut,
   User as UserIcon,
   ChevronDown,
   RefreshCw,
@@ -15,7 +14,6 @@ interface HeaderProps {
   user: APSUser | null;
   isAuthenticated: boolean;
   onLogin: () => void;
-  onLogout: () => void;
   isLoadingAuth: boolean;
   onOpenExcelModal?: () => void;
   totalScheduleCount?: number;
@@ -25,7 +23,6 @@ export const Header: React.FC<HeaderProps> = ({
   user,
   isAuthenticated,
   onLogin,
-  onLogout,
   isLoadingAuth,
   onOpenExcelModal,
   totalScheduleCount = 0,
@@ -105,23 +102,10 @@ export const Header: React.FC<HeaderProps> = ({
                       <ExternalLink size={14} />
                       <span>Autodesk Developer Portal</span>
                     </a>
-                    <button className="menu-item text-red-400" onClick={onLogout}>
-                      <LogOut size={14} />
-                      <span>Sign Out</span>
-                    </button>
                   </div>
                 )}
               </div>
 
-              {/* Direct Logout Button */}
-              <button
-                className="btn-logout-direct"
-                onClick={onLogout}
-                title="Sign out of Autodesk"
-              >
-                <LogOut size={16} />
-                <span>Logout</span>
-              </button>
             </div>
           ) : (
             <button
@@ -134,7 +118,7 @@ export const Header: React.FC<HeaderProps> = ({
               ) : (
                 <LogIn size={16} />
               )}
-              <span>Sign in with Autodesk</span>
+              <span>Retry APS connection</span>
             </button>
           )}
         </div>
